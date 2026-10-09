@@ -1,0 +1,61 @@
+{
+  "name": "netops-console",
+  "version": "1.0.0",
+  "private": true,
+  "description": "网络分析与监控运维控制台 - Zabbix 数据源 + 大屏可视化 + Web终端/配置下发 + 会话流量分析 + 内网测速",
+  "main": "server/index.js",
+  "bin": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "check": "node tools/smoke.js && node tools/tpl-check.js && node tools/dupkey-check.js && node tools/front-check.js",
+    "smoke": "node tools/smoke.js",
+    "tpl": "node tools/tpl-check.js",
+    "dupkey": "node tools/dupkey-check.js",
+    "front": "node tools/front-check.js",
+    "verify:ui": "node tools/verify-ui.js",
+    "e2e": "node tools/e2e.js",
+    "pcap": "node tools/pcap-smoke.js",
+    "scan": "node tools/scan-smoke.js",
+    "diag": "node tools/netdiag-smoke.js",
+    "toolbox": "node tools/toolbox-smoke.js",
+    "deep": "node tools/deep-tools-smoke.js",
+    "wifi": "node tools/wifi-smoke.js",
+    "migrate": "node tools/migrate.js",
+    "build": "pkg . --target node18-win-x64 --output dist/netops-console-win.exe && pkg . --target node18-macos-x64 --output dist/netops-console-macos && pkg . --target node18-linux-x64 --output dist/netops-console-linux"
+  },
+  "pkg": {
+    "scripts": [
+      "server/**/*.js"
+    ],
+    "assets": [
+      "public/**/*",
+      "server/oui.json",
+      "node_modules/vue/dist/**/*",
+      "node_modules/echarts/dist/**/*"
+    ],
+    "targets": [
+      "node18-win-x64",
+      "node18-macos-x64",
+      "node18-linux-x64"
+    ],
+    "outputPath": "dist",
+    "outfile": "netops-console-%s"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@vue/compiler-dom": "^3.5.43",
+    "echarts": "^6.1.0",
+    "express": "^5.2.1",
+    "nodemailer": "^10.0.10",
+    "pg": "^8.23.0",
+    "ssh2": "^1.17.0",
+    "vue": "^3.5.43",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  }
+}

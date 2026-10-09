@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>网络运维工具箱 · NetToolbox 集成展示</title>
+<style>
+  :root{
+    --bg:#f1f4f9; --bg-soft:#f7f9fc; --surface:#ffffff;
+    --border:#e2e8f1; --border-2:#d3dbe7;
+    --text:#16202e; --text-2:#5a6a80; --text-3:#93a2b5;
+    --primary:#2563eb; --primary-600:#1d4ed8; --primary-weak:#eef4ff;
+    --success:#16a34a; --warn:#d97706; --danger:#dc2626; --cyan:#06b6d4;
+    --radius:14px; --radius-sm:10px; --shadow:0 1px 3px rgba(16,32,46,.06),0 8px 24px rgba(16,32,46,.06);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    background:var(--bg);color:var(--text);line-height:1.6;-webkit-font-smoothing:antialiased}
+  a{color:var(--primary);text-decoration:none}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 22px}
+  /* hero */
+  .hero{position:relative;overflow:hidden;background:linear-gradient(135deg,#2563eb 0%,#22d3ee 100%);color:#fff;padding:64px 0 72px}
+  .hero::after{content:"";position:absolute;right:-80px;top:-80px;width:360px;height:360px;border-radius:50%;
+    background:rgba(255,255,255,.12);filter:blur(8px)}
+  .hero h1{font-size:38px;margin:0 0 10px;font-weight:800;letter-spacing:-.5px}
+  .hero p{font-size:16px;margin:0;max-width:680px;opacity:.95}
+  .hero .tag{display:inline-block;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);
+    padding:5px 12px;border-radius:999px;font-size:12.5px;margin-bottom:18px;font-weight:600}
+  .stats{display:flex;gap:14px;flex-wrap:wrap;margin-top:30px}
+  .stat{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.28);border-radius:var(--radius-sm);
+    padding:14px 20px;min-width:130px}
+  .stat b{display:block;font-size:26px;font-weight:800;line-height:1.1}
+  .stat span{font-size:12px;opacity:.9}
+  /* sections */
+  section{padding:48px 0}
+  .sec-head{display:flex;align-items:baseline;gap:12px;margin-bottom:22px}
+  .sec-head h2{font-size:23px;margin:0;font-weight:750}
+  .sec-head .kicker{font-size:12.5px;color:var(--primary);font-weight:700;text-transform:uppercase;letter-spacing:.6px}
+  .sec-head .line{flex:1;height:1px;background:var(--border-2)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:16px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;
+    box-shadow:var(--shadow);transition:transform .15s ease,box-shadow .15s ease}
+  .card:hover{transform:translateY(-3px);box-shadow:0 10px 30px rgba(16,32,46,.12)}
+  .card .top{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+  .ic{width:42px;height:42px;border-radius:11px;display:flex;align-items:center;justify-content:center;flex:0 0 42px}
+  .ic svg{width:22px;height:22px}
+  .card h3{margin:0;font-size:16.5px;font-weight:700}
+  .card .en{font-size:11.5px;color:var(--text-3);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .card p{margin:6px 0 12px;font-size:13.5px;color:var(--text-2)}
+  .tags{display:flex;flex-wrap:wrap;gap:6px}
+  .tagx{font-size:11.5px;background:var(--primary-weak);color:var(--primary-600);padding:3px 9px;border-radius:999px;font-weight:600}
+  .tagx.g{background:#e9f7ef;color:var(--success)}
+  .tagx.o{background:#fff3e6;color:var(--warn)}
+  .cat-h{font-size:14px;font-weight:700;color:var(--text-2);margin:8px 0 14px;display:flex;align-items:center;gap:8px}
+  .cat-h .dot{width:9px;height:9px;border-radius:50%}
+  /* live demo */
+  .demo{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+  .demo .bar{background:linear-gradient(135deg,#1e293b,#334155);color:#fff;padding:14px 20px;font-weight:700;display:flex;align-items:center;gap:10px}
+  .demo .bar .pulse{width:9px;height:9px;border-radius:50%;background:var(--success);box-shadow:0 0 0 0 rgba(22,163,74,.6);animation:p 1.8s infinite}
+  @keyframes p{0%{box-shadow:0 0 0 0 rgba(22,163,74,.6)}70%{box-shadow:0 0 0 8px rgba(22,163,74,0)}100%{box-shadow:0 0 0 0 rgba(22,163,74,0)}}
+  .demo .body{padding:22px;display:grid;grid-template-columns:1fr 1fr;gap:22px}
+  @media(max-width:760px){.demo .body{grid-template-columns:1fr}.hero h1{font-size:30px}}
+  label{display:block;font-size:12.5px;color:var(--text-2);font-weight:600;margin-bottom:6px}
+  .inp{width:100%;height:42px;padding:0 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);
+    font-size:14px;background:#fff;color:var(--text)}
+  .inp:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(37,99,235,.13)}
+  .btn{height:42px;padding:0 20px;border:0;border-radius:var(--radius-sm);background:var(--primary);color:#fff;
+    font-size:14px;font-weight:700;cursor:pointer;transition:background .15s}
+  .btn:hover{background:var(--primary-600)}
+  .btn.ghost{background:#fff;color:var(--primary);border:1px solid var(--border-2)}
+  .row{display:flex;gap:10px;align-items:flex-end;margin-bottom:14px}
+  .row .inp{flex:1}
+  pre.out{background:#0f172a;color:#cbd5e1;border-radius:var(--radius-sm);padding:16px;font-size:13px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:auto;margin:0;min-height:230px;line-height:1.55}
+  pre.out .k{color:#7dd3fc}.pre .v{color:#86efac}
+  .note{font-size:12px;color:var(--text-3);margin-top:8px}
+  /* footer */
+  footer{background:#0f172a;color:#94a3b8;padding:34px 0;font-size:13px;margin-top:20px}
+  footer a{color:#7dd3fc}
+  .pill{display:inline-block;background:rgba(125,211,252,.15);color:#7dd3fc;padding:2px 9px;border-radius:999px;font-size:11.5px;margin-right:6px}
+  .arch{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+  .arch .chip{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 16px;font-size:13px;flex:1;min-width:200px}
+  .arch .chip b{display:block;color:var(--text);font-size:14px;margin-bottom:2px}
+</style>
+</head>
+<body>
+<div class="hero">
+  <div class="wrap">
+    <span class="tag">NetToolbox × netops-console 集成</span>
+    <h1>网络运维工具箱 / Network Toolbox</h1>
+    <p>将 NetToolbox 的核心网络诊断能力，以原生 Node 模块形式并入 netops-console，统一接入登录鉴权、scan 权限与操作审计，并打包进单文件 Windows EXE。</p>
+    <div class="stats">
+      <div class="stat"><b>13</b><span>项诊断/计算能力</span></div>
+      <div class="stat"><b>4</b><span>能力分类</span></div>
+      <div class="stat"><b>0</b><span>新增第三方依赖</span></div>
+      <div class="stat"><b>✓</b><span>权限/审计已接入</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+  <!-- 能力总览 -->
+  <section id="overview">
+    <div class="sec-head">
+      <span class="kicker">Capabilities</span>
+      <h2>能力总览</h2>
+      <span class="line"></span>
+    </div>
+
+    <div class="cat-h"><span class="dot" style="background:var(--primary)"></span>Web / HTTP 类</div>
+    <div class="grid">
+      <div class="card">
+        <div class="top">
+          <div class="ic" style="background:#eef4ff"><svg viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2"><path d="M4 12h16M14 6l6 6-6 6"/></svg></div>
+          <div><h3>重定向链追踪</h3><div class="en">redirectTrace</div></div>
+        </div>
+        <p>逐跳追踪 HTTP 重定向，识别协议降级、跨域跳转、HSTS、重定向环路，并给出风险研判。</p>
+        <div class="tags"><span class="tagx">降级检测</span><span class="tagx">跨域</span><span class="tagx">环路</span><span class="tagx g">HSTS</span></div>
+      </div>
+      <div class="card">
+        <div class="top">
+          <div class="ic" style="background:#e9f7ef"><svg viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg></div>
+          <div><h3>HTTP 可用性</h3><div class="en">httpCheck</div></div>
+        </div>
+        <p>检测状态码、响应耗时、标题、关键字命中、TLS 证书剩余天数与关键响应头。</p>
+        <div class="tags"><span class="tagx">状态码</span><span class="tagx">耗时</span><span class="tagx g">证书余期</span></div>
+      </div>
+      <div class="card">
+        <div class="top">
+          <div class="ic" style="background:#fff3e6"><svg viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
+          <div><h3>SSL 证书</h3><div class="en">sslCert</div></div>
+        </div>
+        <p>解析证书主体/签发者/有效期/是否自签，校验链路并告警过期与弱协议（TLS 1.0/1.1）。</p>
+        <div class="tags"><span class="tagx o">自签</span><span class="tagx o">弱协议</span><span class="tagx">过期</span></div>
+      </div>
+    </div>
+
+    <div class="cat-h" style="margin-top:26px"><span class="dot" style="background:var(--cyan)"></span>DNS / 网络类</div>
+    <div class="grid">
+      <div class="card">
+        <div class="top">
+          <div class="ic" style="background:#e0f7fb"><svg viewBox="0 0 24 24" fill="none" stroke="#06b6d4" stroke-width="2"><path d="M3 5h18v14H3z"/><path d="M3 9h18M8 5v14"/></svg></div>
+          <div><h3>Whois 归属</h3><div class="en">whoisLookup</div></div>
+        </div>
+        <p>RDAP 优先、WHOIS 协议兜底，查询域名/IP 的注册者、注册局、创建/过期时间。</p>
+        <div class="tags"><span class="tagx">RDAP</span><span class="tagx">WHOIS</span><span class="tagx">注册局</span></div>
+      </div>
+      <div class="card">
+        <div class="top">
+          <div class="ic" style="background:#e0f7fb"><svg viewBox="0 0 24 24" fill="none" stroke="#06b6d4" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg></div>
+          <div><h3>公网出口 IP</h3><div class="en">publicIp</div></div>
+        </div>
+        <p>多源兜底查询本机公网出口 IP，附 ASN、组织与地理位置（cloudflare→ipify→my-ip）。</p>
+        <div class="tags"><span class="tagx">三源兜底</span><span class="tagx">ASN</span><span class="tagx">地理</span></div>
+      </div>
+      <div class="card">
+        <div class="top">
+          <div class="ic" style="background:#e0f7fb"><svg viewBox="0 0 24 24" fill="none" stroke="#06b6d4" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="8" cy="7" r="1.4" fill="#06b6d4"/><circle cx="14" cy="12" r="1.4" fill="#06b6d4"/><circle cx="10" cy="17" r="1.4" fill="#06b6d4"/></svg></div>
+          <div><h3>DNS 诊断</h3><div class="en">dnsDiag</div></div>
+        </div>
+        <p>本机 + 阿里/腾讯/Google/Cloudflare 多公共 DNS、多类型解析对比，识别解析一致性与疑似劫持。</p>
+        <div class="tags"><span class="tagx">多 DNS</span><span class="tagx">多类型</span><span class="tagx g">劫持识别</span></div>
+      </div>
+    </div>
+
+    <div class="cat-h" style="margin-top:26px"><span class="dot" style="background:var(--success)"></span>主机探测类</div>
+    <div class="grid">
+      <div class="card">
+        <div class="top">
+          <div class="ic" style="background:#e9f7ef"><svg viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2"><path d="M3 12h4l2 6 4-14 2 8h6"/></svg></div>
+          <div><h3>Ping 详版</h3><div class="en">pingTest</div></div>
+        </div>
+        <p>探测连通性、解析 TTL，按丢包/时延/抖动给出健康评分等级（ok/low/medium/high）。</p>
+        <div class="tags"><span class="tagx g">TTL</span><span class="tagx g">健康评分</span></div>
+      </div>
+      <div class="card">
+        <div class="top">
+          <div class="ic" style="background:#e9f7ef"><svg viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2"><circle cx="5" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 12h10M5 12a9 9 0 0 1 14 0"/></svg></div>
+          <div><h3>MTR 路由追踪</h3><div class="en">mtrTrace</div></div>
+        </div>
+        <p>多轮采样汇聚每跳 avg/min/max/抖动/丢包，兼容中英文 tracert 与 Linux traceroute 输出。</p>
+        <div class="tags"><span class="tagx">多跳</span><span class="tagx">丢包</span><span class="tagx">抖动</span></div>
+      </div>
+      <div class="card">
+        <div class="top">
+          <div class="ic" style="background:#e9f7ef"><svg viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><circle cx="7" cy="7" r="1" fill="#16a34a"/><circle cx="7" cy="17" r="1" fill="#16a34a"/></svg></div>
+          <div><h3>服务 / OS 指纹</h3><div class="en">fingerprintHost</div></div>
+        </div>
+        <p>TCP 并发探测 + Banner/TLS 抓取，推断 OS（TTL）、设备类型（端口组合）与安全高危端口风险。</p>
+        <div class="tags"><span class="tagx">端口</span><span class="tagx">Banner</span><span class="tagx o">风险</span></div>
+      </div>
+      <div class="card">
+        <div class="top">
+          <div class="ic" style="background:#e9f7ef"><svg viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2"><path d="M3 17l5-5 4 3 5-7 4 4"/><path d="M3 21h18"/></svg></div>
+          <div><h3>网卡流量</h3><div class="en">ifstat</div></div>
+        </div>
+        <p>Windows 用 Get-NetAdapterStatistics、Linux 用 /proc/net/dev 差分计算各适配器收发包速率。</p>
+        <div class="tags"><span class="tagx">实时速率</span><span class="tagx">多适配器</span></div>
+      </div>
+    </div>
+
+    <div class="cat-h" style="margin-top:26px"><span class="dot" style="background:var(--warn)"></span>运维计算类</div>
+    <div class="grid">
+      <div class="card">
+        <div class="top">
+          <div class="ic" style="background:#fff3e6"><svg viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/><circle cx="18" cy="18" r="2"/></svg></div>
+          <div><h3>子网计算器</h3><div class="en">subnetAnalyze / VLSM / Same</div></div>
+        </div>
+        <p>支持 CIDR/掩码/单 IP 三种输入，计算网络号、广播、可用范围、地址类别与私网属性；附 VLSM 分配与同网段判定。</p>
+        <div class="tags"><span class="tagx o">CIDR</span><span class="tagx o">VLSM</span><span class="tagx o">同网段</span></div>
+      </div>
+      <div class="card">
+        <div class="top">
+          <div class="ic" style="background:#fff3e6"><svg viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
+          <div><h3>NTP 校时</h3><div class="en">ntpQuery</div></div>
+        </div>
+        <p>UDP 123 发送 NTP v3 报文，解析时间戳并计算本地与标准时间的 offset / delay 偏差。</p>
+        <div class="tags"><span class="tagx o">offset</span><span class="tagx o">delay</span></div>
+      </div>
+      <div class="card">
+        <div class="top">
+          <div class="ic" style="background:#fff3e6"><svg viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></div>
+          <div><h3>WoL 唤醒</h3><div class="en">wolWake</div></div>
+        </div>
+        <p>构造 Magic Packet 经 UDP 广播定向唤醒目标 MAC 主机，支持跨子网中继地址。</p>
+        <div class="tags"><span class="tagx o">Magic Packet</span><span class="tagx o">广播</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 在线演示 -->
+  <section id="demo">
+    <div class="sec-head">
+      <span class="kicker">Live Demo</span>
+      <h2>在线演示 · 子网计算器</h2>
+      <span class="line"></span>
+    </div>
+    <div class="demo">
+      <div class="bar"><span class="pulse"></span> 子网计算器（纯前端实时计算，无需后端）</div>
+      <div class="body">
+        <div>
+          <div class="row">
+            <div style="flex:1">
+              <label>输入（CIDR 或 单 IP / 掩码）</label>
+              <input class="inp" id="cidr" value="192.168.10.0/24" spellcheck="false" />
+            </div>
+            <button class="btn" id="calcBtn">计算</button>
+          </div>
+          <div class="row">
+            <div style="flex:1"><label>VLSM 需求（主机数，逗号分隔）</label>
+              <input class="inp" id="vlsm" value="50,20,10" spellcheck="false" /></div>
+            <button class="btn ghost" id="vlsmBtn">分配</button>
+          </div>
+          <div class="note">示例：10.0.0.0/8、172.16.5.1/20、192.168.1.10 255.255.255.0。可直接打开使用，与服务端 /api/toolbox/subnet 算法一致。</div>
+        </div>
+        <pre class="out" id="out"><span class="k">// 点击「计算」查看结果…</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- 集成架构 -->
+  <section id="arch">
+    <div class="sec-head">
+      <span class="kicker">Integration</span>
+      <h2>集成方式</h2>
+      <span class="line"></span>
+    </div>
+    <div class="arch">
+      <div class="chip"><b>原生 Node 重写</b>NetToolbox 的 Linux 专有实现（/proc/net、AF_PACKET、ip/iperf3）无法打包进 EXE，故用 Node 原生实现可在 Windows 跑的 13 项能力，零新增依赖。</div>
+      <div class="chip"><b>统一鉴权与审计</b>主动探测类（ping/mtr/fingerprint/ifstat/wol）接 requirePerm('scan')；其余 authRequired；全部 auth.logAction 留痕。</div>
+      <div class="chip"><b>单文件分发</b>经 pkg 打包为 dist/netops-console.exe（~122 MB），含完整工具箱，已实测启动并验证权限门禁。</div>
+    </div>
+    <div class="arch">
+      <div class="chip"><b>自检三件套</b>npm run check（13 模板编译 + 重复键扫描）、verify:ui（14 路由 0 控制台报错）、e2e（98/98）。</div>
+      <div class="chip"><b>专属冒烟</b>npm run toolbox — 引擎级 + 接口级鉴权自检，记录于 tools/toolbox-smoke.js。</div>
+    </div>
+  </section>
+</div>
+
+<footer>
+  <div class="wrap">
+    <div><span class="pill">Node 原生</span><span class="pill">权限接入</span><span class="pill">审计留痕</span><span class="pill">pkg 单文件</span></div>
+    <p style="margin:14px 0 6px">网络运维工具箱已并入 netops-console，在界面左侧「网络运维工具箱」导航或访问 <a href="/toolbox">/toolbox</a> 即可使用全部能力。</p>
+    <p style="margin:0;opacity:.7">NetToolbox × netops-console · 自包含展示页，可独立打开或随平台静态托管。</p>
+  </div>
+</footer>
+
+<script>
+(function(){
+  function ip2long(ip){const p=ip.split('.').map(Number);if(p.length!==4||p.some(isNaN))return null;
+    return ((p[0]<<24)+(p[1]<<16)+(p[2]<<8)+p[3])>>>0;}
+  function long2ip(n){return [(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255].join('.');}
+  function maskFromPrefix(p){
+    if(p<0||p>32)return null;
+    return p===0?0:((0xffffffff<<(32-p))>>>0);
+  }
+  function classOf(ip){
+    const f=+ip.split('.')[0];
+    if(f<128)return 'A'; if(f<192)return 'B'; if(f<224)return 'C'; if(f<240)return 'D（组播）'; return 'E（保留）';
+  }
+  function isPrivate(ip){
+    const l=ip2long(ip); if(l===null)return false;
+    const inC=(a,b)=>l>=ip2long(a)&&l<=ip2long(b);
+    return inC('10.0.0.0','10.255.255.255')||inC('172.16.0.0','172.31.255.255')||
+           inC('192.168.0.0','192.168.255.255')||inC('127.0.0.0','127.255.255.255')||
+           inC('169.254.0.0','169.254.255.255');
+  }
+  function analyze(spec){
+    let ip, prefix;
+    if(spec.includes('/')){const [a,p]=spec.split('/');ip=a;prefix=parseInt(p,10);}
+    else if(spec.includes(' ')||spec.includes('/')===false){
+      // try "ip mask"
+      const parts=spec.trim().split(/\s+/);
+      if(parts.length===2){ip=parts[0];const ml=maskFromMask(parts[1]);if(ml===null)throw new Error('掩码无效');prefix=32-Math.log2((~ml>>>0)+1);}
+      else {ip=spec.trim();prefix=32;}
+    } else {ip=spec.trim();prefix=32;}
+    const il=ip2long(ip); if(il===null)throw new Error('IP 无效');
+    const mask=maskFromPrefix(prefix); if(mask===null)throw new Error('前缀无效');
+    const net=(il&mask)>>>0;
+    const bcast=(net|(~mask>>>0))>>>0;
+    const total=Math.pow(2,32-prefix);
+    const usable=prefix<=30?total-2:total;
+    return {ip,network:long2ip(net),mask:long2ip(mask),prefix,broadcast:long2ip(bcast),
+      firstHost:prefix<31?long2ip((net+1)>>>0):long2ip(net),
+      lastHost:prefix<31?long2ip((bcast-1)>>>0):long2ip(bcast),
+      total,usable,addressClass:classOf(ip),scope:isPrivate(ip)?'私有地址':'公网地址'};
+  }
+  function maskFromMask(m){const p=m.split('.').map(Number);if(p.length!==4||p.some(isNaN))return null;
+    return ip2long(m);}
+  function render(r){
+    return `<span class="k">网络号   </span> ${r.network}/${r.prefix}\n`+
+           `<span class="k">子网掩码 </span> ${r.mask}\n`+
+           `<span class="k">广播地址 </span> ${r.broadcast}\n`+
+           `<span class="k">可用范围 </span> ${r.firstHost} ~ ${r.lastHost}\n`+
+           `<span class="k">地址总数 </span> ${r.total}\n`+
+           `<span class="k">可用主机 </span> ${r.usable}\n`+
+           `<span class="k">地址类别 </span> ${r.addressClass}\n`+
+           `<span class="k">地址属性 </span> ${r.scope}`;
+  }
+  function vlsm(cidr,needs){
+    const base=analyze(cidr); let cur=ip2long(base.network); const need=maskFromPrefix(base.prefix);
+    const alloc=[];
+    const sorted=needs.slice().sort((a,b)=>b-a);
+    for(const n of sorted){
+      let p=32; while(Math.pow(2,32-p)-2<n && p>0)p--; if(p<base.prefix)p=base.prefix;
+      const m=maskFromPrefix(p); const net=(cur&m)>>>0;
+      if((cur&m)!==cur) cur=(cur&m)>>>0; // align
+      alloc.push({hosts:n,prefix:p,network:long2ip(net),mask:long2ip(m),broadcast:long2ip((net|(~m>>>0))>>>0)});
+      cur=(net+Math.pow(2,32-p))>>>0;
+    }
+    return alloc;
+  }
+  const out=document.getElementById('out');
+  document.getElementById('calcBtn').onclick=function(){
+    try{const r=analyze(document.getElementById('cidr').value.trim());out.innerHTML=render(r);}
+    catch(e){out.innerHTML='<span style="color:#fca5a5">错误：'+e.message+'</span>';}
+  };
+  document.getElementById('vlsmBtn').onclick=function(){
+    try{
+      const needs=document.getElementById('vlsm').value.split(',').map(s=>parseInt(s.trim(),10)).filter(n=>!isNaN(n));
+      const a=vlsm(document.getElementById('cidr').value.trim(),needs);
+      let s='VLSM 分配（按需求从大到小）\n'+'-'.repeat(34)+'\n';
+      for(const x of a) s+=`${String(x.hosts).padStart(4)}台 → ${x.network}/${x.prefix.padStart(2)}  掩码 ${x.mask}\n`;
+      out.innerHTML=s.replace(/ /g,' ');
+    }catch(e){out.innerHTML='<span style="color:#fca5a5">错误：'+e.message+'</span>';}
+  };
+  // 初始计算
+  document.getElementById('calcBtn').click();
+})();
+</script>
+</body>
+</html>

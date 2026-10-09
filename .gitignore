@@ -1,0 +1,14 @@
+node_modules/
+dist/
+data/
+log/
+*.log
+*.bak
+.DS_Store
+Thumbs.db
+
+# --- project-specific ignores ---
+# old stray build artifact left at repo root (superseded by dist/)
+distnetops-console.exe
+# build/runtime artifacts
+*.genie
