@@ -1,4 +1,4 @@
-网络运维与故障排除工具平台 v1.1.0 - Linux x64
+网络运维与故障排除工具平台 v1.1.1 - Linux x64
 
 快速安装：
   chmod +x install.sh

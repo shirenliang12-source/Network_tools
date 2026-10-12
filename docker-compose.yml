@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: netops-console:1.1.0
+    image: netops-console:1.1.1
     container_name: netops-console
     restart: unless-stopped
     network_mode: host

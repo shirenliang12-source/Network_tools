@@ -238,7 +238,7 @@
             <span>{{ S.datasourceMode === 'zabbix' ? 'Zabbix 数据源' : '演示模式' }}</span>
             <span :class="S.datasourceMode==='zabbix' ? 'c-green' : 'c-amber'">●</span>
           </div>
-          <div style="margin-top:2px">v1.1.0 · {{ S.user.roleName }}</div>
+          <div style="margin-top:2px">v1.1.1 · {{ S.user.roleName }}</div>
         </div>
       </aside>
 

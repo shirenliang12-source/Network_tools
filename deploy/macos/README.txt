@@ -1,4 +1,4 @@
-网络运维与故障排除工具平台 v1.1.0 - macOS
+网络运维与故障排除工具平台 v1.1.1 - macOS
 
 此包同时包含 Apple Silicon（M1/M2/M3/M4/M5）与 Intel Mac 版本。
 

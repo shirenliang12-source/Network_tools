@@ -283,7 +283,7 @@ function printReady(port) {
   const scheme = useHttps ? 'https' : 'http';
   const line = '='.repeat(66);
   console.log('\n' + line);
-  console.log('  网络运维与故障排除工具平台  netops-console  v1.1.0');
+  console.log('  网络运维与故障排除工具平台  netops-console  v1.1.1');
   console.log(line);
   console.log(`  传输协议        ${useHttps ? 'HTTPS 🔒' : 'HTTP（未启用 TLS）'}`);
   console.log(`  本机访问        ${scheme}://127.0.0.1:${port}`);

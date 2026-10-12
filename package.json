@@ -1,6 +1,6 @@
 {
   "name": "netops-console",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "纯网络运维与故障排除工具平台 - 扫描、诊断、SNMP、终端、抓包与流量分析",
   "main": "server/index.js",
