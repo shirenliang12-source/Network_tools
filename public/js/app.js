@@ -204,7 +204,10 @@
         { p: '/troubleshoot', t: '排障工作台', i: 'search' }
       ]
     },
-    { group: '平台管理', items: [{ p: '/system', t: '系统管理', i: 'settings' }] }
+    { group: '平台管理', items: [
+      { p: '/cleanup', t: '数据清理中心', i: 'trash', admin: true },
+      { p: '/system', t: '系统管理', i: 'settings' }
+    ] }
   ];
 
   const Shell = {
@@ -298,6 +301,9 @@
       const pwdOpen = ref(false), pwdLoading = ref(false);
       const pwd = reactive({ oldPassword: '', newPassword: '' });
       const routeKey = ref(0);
+      const visibleNav = computed(() => NAV.map(g => ({
+        ...g, items: g.items.filter(it => !it.admin || S.user?.role === 'admin')
+      })).filter(g => g.items.length));
       const crumb = (p) => {
         const m = {
           '/alarms': ['告警中心', '待处理问题、级别状态与处置闭环'],
@@ -318,6 +324,7 @@
           '/toolbox': ['网络运维工具箱', '连通性、DNS、证书、路径与子网工具'],
           '/wifi': ['无线勘测', '无线网络扫描、采样与定位'],
           '/speed': ['内网测速', '带宽吞吐、延迟、丢包与链路质量'],
+          '/cleanup': ['数据清理中心', '资产生命周期、历史数据清理与审计追踪'],
           '/system': ['系统管理', '数据源、凭据、用户权限与审计日志']
         };
         const k = p.split('/').slice(0, 2).join('/');
@@ -373,7 +380,7 @@
       onMounted(boot);
       watch(() => S.user, v => { if (v && !timer) timer = setInterval(pollStatus, 30000); });
       return {
-        S, NAV, currentRoute, comp, compProps, routeKey, crumbTitle, crumbSub, isActive,
+        S, NAV: visibleNav, currentRoute, comp, compProps, routeKey, crumbTitle, crumbSub, isActive,
         menuOpen, aiOpen, kw, doSearch, openAlarms, logout, toggleSb, refreshAll, ic, go,
         pwdOpen, pwd, pwdLoading, savePwd
       };

@@ -258,6 +258,9 @@ function build(pool) {
       const r = await q(`SELECT data FROM ${PG('speedResults')} ORDER BY at DESC LIMIT ${Number(limit) || 50}`);
       return r.map(x => (typeof x.data === 'object' ? x.data : safeJson(x.data))).filter(Boolean);
     },
+    async speedRemoveOld(cutIso) {
+      return (await q(`DELETE FROM ${PG('speedResults')} WHERE at < $1 RETURNING id`, [cutIso])).length;
+    },
 
     /* ----------------------------- 终端录像 ---------------------------- */
     /** events 仍落盘（Wireshark/回放直接读文件），这里只管元数据 */
@@ -575,12 +578,14 @@ function build(pool) {
     },
     async scanTaskRemove(id) { const r = await q(`DELETE FROM ${PG('scanTasks')} WHERE id = $1 RETURNING id`, [id]); return r.length > 0; },
     async scanRemoveOld(cutIso, taskId = '') {
-      const cut = String(cutIso || '');
-      const kw = taskId ? 'AND task_id = $2' : '';
-      const params = taskId ? [cut, taskId] : [cut];
-      const r1 = await q(`DELETE FROM ${PG('scanPorts')} WHERE created_at < $1 ${kw}`, params);
-      const r2 = await q(`DELETE FROM ${PG('scanHosts')} WHERE created_at < $1 ${kw}`, params);
-      return { ports: r1.rowCount || 0, hosts: r2.rowCount || 0 };
+      const p = [cutIso];
+      const where = taskId ? (p.push(taskId), 'task_id = $2') : 'started_at < $1';
+      const ids = (await q(`SELECT id FROM ${PG('scanRuns')} WHERE ${where}`, p)).map(x => x.id);
+      if (!ids.length) return { runs: 0, hosts: 0, ports: 0 };
+      const ports = (await q(`DELETE FROM ${PG('scanPorts')} WHERE run_id = ANY($1::text[]) RETURNING id`, [ids])).length;
+      const hosts = (await q(`DELETE FROM ${PG('scanHosts')} WHERE run_id = ANY($1::text[]) RETURNING id`, [ids])).length;
+      const runs = (await q(`DELETE FROM ${PG('scanRuns')} WHERE id = ANY($1::text[]) RETURNING id`, [ids])).length;
+      return { runs, hosts, ports };
     },
     async flowRemoveOld(cutIso, taskIds = []) {
       const ids = Array.isArray(taskIds) ? taskIds.filter(Boolean) : [];

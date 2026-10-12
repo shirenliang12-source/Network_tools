@@ -147,6 +147,17 @@ function build() {
     /* ----------------------------- 测速结果 ---------------------------- */
     async speedSave(row) { return store.saveSpeedResult(row); },
     async speedList(limit = 50) { return store.listSpeedResults(limit); },
+    async speedRemoveOld(cutIso) {
+      let n = 0;
+      for (const f of store.fs.readdirSync(store.SPEED_DIR).filter(x => x.endsWith('.json'))) {
+        const full = store.path.join(store.SPEED_DIR, f);
+        try {
+          const row = JSON.parse(store.fs.readFileSync(full, 'utf8'));
+          if (String(row.at || row.createdAt || '') < cutIso) { store.fs.unlinkSync(full); n++; }
+        } catch { }
+      }
+      return n;
+    },
 
     /* ----------------------------- 终端录像 ---------------------------- */
     async recNew(meta) { return store.newRecording(meta); },
@@ -304,11 +315,14 @@ function build() {
     },
     async scanRemoveOld(cutIso, taskId = '') {
       const cut = String(cutIso || '');
+      const gone = arr(store.db.scanRuns).filter(r => (taskId && r.taskId === taskId) || (!taskId && String(r.startedAt || '') < cut));
+      const ids = new Set(gone.map(r => r.id));
       const beforeH = store.db.scanHosts.length, beforeP = store.db.scanPorts.length;
-      store.db.scanHosts = arr(store.db.scanHosts).filter(r => String(r.createdAt || '') >= cut && !(taskId && r.taskId === taskId));
-      store.db.scanPorts = arr(store.db.scanPorts).filter(r => String(r.createdAt || '') >= cut && !(taskId && r.taskId === taskId));
+      store.db.scanRuns = arr(store.db.scanRuns).filter(r => !ids.has(r.id));
+      store.db.scanHosts = arr(store.db.scanHosts).filter(r => !ids.has(r.runId));
+      store.db.scanPorts = arr(store.db.scanPorts).filter(r => !ids.has(r.runId));
       store.save(true);
-      return { hosts: beforeH - store.db.scanHosts.length, ports: beforeP - store.db.scanPorts.length };
+      return { runs: gone.length, hosts: beforeH - store.db.scanHosts.length, ports: beforeP - store.db.scanPorts.length };
     },
 
     /* ------------------------ 网络诊断工具箱（P3） ------------------------ */

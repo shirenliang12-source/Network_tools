@@ -36,7 +36,10 @@ const R = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch(e => {
 /* --------------------------- 通用：主机公开化 --------------------------- */
 async function pubHost(h) {
   const inv = await db.inventoryGet(h.host);
-  const source = h.source || ds.getProvider().name || 'unknown';
+  const detached = !!inv.syncDisabledAt;
+  if (detached && inv.detachedSnapshot) h = { ...h, ...inv.detachedSnapshot, host: h.host };
+  const upstreamSource = h.source || ds.getProvider().name || 'unknown';
+  const source = detached ? 'local' : upstreamSource;
   return {
     hostid: h.hostid, host: h.host, name: inv.name || h.name || h.host, ip: inv.ip || h.ip,
     status: h.status, available: h.available, error: h.error || '',
@@ -49,7 +52,8 @@ async function pubHost(h) {
     portCount: h.portCount || null,
     health: ds.healthScore(h),
     note: inv.note || '', owner: inv.owner || '', rack: inv.rack || '',
-    source, sourceLabel: source === 'zabbix' ? 'Zabbix 实时采集' : source === 'demo' ? '平台演示数据' : '平台本地数据',
+    source, upstreamSource,
+    sourceLabel: source === 'zabbix' ? 'Zabbix 实时采集' : source === 'demo' ? '平台演示数据' : '平台本地资产（已解除同步）',
     groups: Array.isArray(h.groups) ? h.groups : [],
     groupNames: Array.isArray(h.groups) ? h.groups.map(g => g.name).filter(Boolean) : [],
     sourceUpdatedAt: inv.updatedAt || null,
@@ -61,6 +65,9 @@ async function pubHost(h) {
     localOverrides: Object.fromEntries(['name', 'ip', 'vendor', 'model', 'os', 'serial', 'zone', 'role', 'owner', 'rack', 'note']
       .filter(k => inv[k] !== undefined && inv[k] !== '').map(k => [k, inv[k]])),
     overriddenFields: ['name', 'ip', 'vendor', 'model', 'os', 'serial', 'zone', 'role', 'owner', 'rack', 'note'].filter(k => inv[k] !== undefined && inv[k] !== ''),
+    lifecycle: inv.deletedAt ? 'deleted' : inv.hiddenAt ? 'hidden' : detached ? 'detached' : 'active',
+    hiddenAt: inv.hiddenAt || null, deletedAt: inv.deletedAt || null,
+    syncDisabledAt: inv.syncDisabledAt || null, lifecycleBy: inv.lifecycleBy || '',
     x: inv.x, y: inv.y
   };
 }
@@ -73,11 +80,19 @@ function inferRole(h) {
   return '其他';
 }
 
-async function allHosts() {
-  return ds.cached('hosts', 25, async () => {
+async function allHosts(includeSuppressed = false) {
+  const list = await ds.cached('hosts:lifecycle', 25, async () => {
     const hs = await ds.getProvider().hosts();
-    return Promise.all(hs.map(h => pubHost(h)));
+    const rows = await Promise.all(hs.map(h => pubHost(h)));
+    const known = new Set(rows.map(h => h.host));
+    const inventory = await db.inventoryAll();
+    for (const [host, inv] of Object.entries(inventory || {})) {
+      if (!inv || !inv.syncDisabledAt || !inv.detachedSnapshot || known.has(host)) continue;
+      rows.push(await pubHost({ ...inv.detachedSnapshot, host, source: 'local' }));
+    }
+    return rows;
   });
+  return includeSuppressed ? list : list.filter(h => h.lifecycle !== 'hidden' && h.lifecycle !== 'deleted');
 }
 
 /* ================================ 认证 ================================ */
@@ -213,6 +228,113 @@ router.post('/devices/:host/inventory', auth.authRequired, auth.requirePerm('ass
   ds.cacheClear();
   auth.logAction(req, 'device.inventory.update', host, JSON.stringify(patch).slice(0, 500));
   res.json({ ok: true, inventory: invRow });
+}));
+
+/* ============================== 数据清理中心 ============================== */
+const CLEANUP_CATEGORIES = new Set(['scan', 'diagnostics', 'logs', 'traffic', 'speed', 'captures', 'recordings']);
+const cleanupTime = (row, fields) => fields.map(k => row && row[k]).find(Boolean) || '';
+async function cleanupPreview(before) {
+  const older = (row, fields) => {
+    const value = cleanupTime(row, fields);
+    return !!value && String(value) < before;
+  };
+  const [scanRuns, diagRuns, logs, flows, speeds, caps, recs] = await Promise.all([
+    db.scanRunList({ limit: 100000 }), db.netdiagRunList({ limit: 100000 }),
+    db.netdiagLogSearch({ to: before, limit: 100000 }), db.flowSearch({ to: before, limit: 100000 }),
+    db.speedList(100000), db.capList({ limit: 100000 }), db.recList({ limit: 100000 })
+  ]);
+  return {
+    scan: scanRuns.filter(x => older(x, ['startedAt', 'createdAt'])).length,
+    diagnostics: diagRuns.filter(x => older(x, ['startedAt', 'createdAt'])).length,
+    logs: Number(logs.total || 0), traffic: Number(flows.total || 0),
+    speed: speeds.filter(x => older(x, ['at', 'createdAt'])).length,
+    captures: caps.filter(x => older(x, ['startedAt', 'at', 'createdAt'])).length,
+    recordings: recs.filter(x => older(x, ['startedAt', 'createdAt'])).length
+  };
+}
+
+router.get('/system/cleanup', auth.requirePerm('admin'), R(async (req, res) => {
+  const days = Math.max(1, Math.min(3650, Number(req.query.days || 30)));
+  const before = new Date(Date.now() - days * 86400000).toISOString();
+  const assets = await allHosts(true);
+  res.json({
+    ok: true, days, before, assets,
+    assetStats: {
+      active: assets.filter(x => x.lifecycle === 'active').length,
+      hidden: assets.filter(x => x.lifecycle === 'hidden').length,
+      detached: assets.filter(x => x.lifecycle === 'detached').length,
+      deleted: assets.filter(x => x.lifecycle === 'deleted').length
+    },
+    history: await cleanupPreview(before)
+  });
+}));
+
+router.post('/system/cleanup/assets/:host', auth.requirePerm('admin'), R(async (req, res) => {
+  const host = req.params.host;
+  const action = String((req.body || {}).action || '');
+  const allowed = new Set(['hide', 'unlink', 'delete', 'restore']);
+  if (!allowed.has(action)) return res.status(400).json({ ok: false, error: '资产操作不合法' });
+  const asset = (await allHosts(true)).find(x => x.host === host);
+  if (!asset) return res.status(404).json({ ok: false, error: '资产不存在' });
+  const now = new Date().toISOString();
+  const patch = { lifecycleBy: req.user.username, lifecycleAt: now };
+  if (action === 'hide') {
+    if (asset.source !== 'zabbix') return res.status(400).json({ ok: false, error: '只有 Zabbix 资产可以隐藏' });
+    patch.hiddenAt = now; patch.deletedAt = null;
+  } else if (action === 'unlink') {
+    if (asset.source !== 'zabbix') return res.status(400).json({ ok: false, error: '只有 Zabbix 资产可以解除同步' });
+    patch.syncDisabledAt = now; patch.hiddenAt = null; patch.deletedAt = null;
+    patch.detachedSnapshot = {
+      hostid: asset.hostid, name: asset.name, ip: asset.ip, vendor: asset.vendor, model: asset.model,
+      os: asset.os, serial: asset.serial, location: asset.location, zone: asset.zone, role: asset.role,
+      status: asset.status, available: asset.available, groups: asset.groups || []
+    };
+  } else if (action === 'delete') {
+    if (asset.source === 'zabbix') return res.status(400).json({ ok: false, error: 'Zabbix 资产请使用“隐藏”或“解除同步”' });
+    patch.deletedAt = now; patch.hiddenAt = null;
+  } else {
+    patch.hiddenAt = null; patch.deletedAt = null; patch.syncDisabledAt = null; patch.detachedSnapshot = null;
+  }
+  await db.inventorySet(host, patch);
+  ds.cacheClear();
+  auth.logAction(req, `cleanup.asset.${action}`, host, `来源=${asset.source}; 原状态=${asset.lifecycle}`);
+  res.json({ ok: true, host, action });
+}));
+
+router.post('/system/cleanup/history', auth.requirePerm('admin'), R(async (req, res) => {
+  const days = Math.max(1, Math.min(3650, Number((req.body || {}).days || 30)));
+  const categories = [...new Set(Array.isArray(req.body?.categories) ? req.body.categories : [])]
+    .filter(x => CLEANUP_CATEGORIES.has(x));
+  if (!categories.length) return res.status(400).json({ ok: false, error: '请至少选择一种历史数据' });
+  const before = new Date(Date.now() - days * 86400000).toISOString();
+  const result = {};
+  if (categories.includes('scan')) result.scan = await db.scanRemoveOld(before);
+  if (categories.includes('diagnostics')) result.diagnostics = await db.netdiagRemoveOld(before);
+  if (categories.includes('logs')) result.logs = await db.netdiagLogRemoveOld(before);
+  if (categories.includes('traffic')) result.traffic = await db.flowRemoveOld(before, []);
+  if (categories.includes('speed')) result.speed = await db.speedRemoveOld(before);
+  if (categories.includes('captures')) {
+    const rows = (await db.capList({ limit: 100000 })).filter(x => {
+      const value = cleanupTime(x, ['startedAt', 'at', 'createdAt']); return value && String(value) < before;
+    });
+    let n = 0;
+    for (const row of rows) {
+      const full = path.resolve(row.path || path.join(store.CAP_DIR, row.name || ''));
+      const root = path.resolve(store.CAP_DIR) + path.sep;
+      if (full.startsWith(root) && fs.existsSync(full)) { try { fs.unlinkSync(full); } catch { } }
+      if (await db.capRemove(row.id)) n++;
+    }
+    result.captures = n;
+  }
+  if (categories.includes('recordings')) {
+    const rows = (await db.recList({ limit: 100000 })).filter(x => {
+      const value = cleanupTime(x, ['startedAt', 'createdAt']); return value && String(value) < before;
+    });
+    let n = 0; for (const row of rows) if (await db.recRemove(row.id)) n++;
+    result.recordings = n;
+  }
+  auth.logAction(req, 'cleanup.history.delete', categories.join(','), `早于=${before}; 结果=${JSON.stringify(result)}`);
+  res.json({ ok: true, days, before, result });
 }));
 
 /* ============================== 告警管理 ============================== */
