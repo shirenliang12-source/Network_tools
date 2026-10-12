@@ -17,7 +17,7 @@ const db = require('./db');
 const ROLES = {
   admin: { name: '管理员', perms: ['*'] },
   ops: {
-    name: '运维', perms: ['view', 'terminal', 'deploy', 'capture', 'speed', 'alarm', 'ai', 'scan', 'session.read', 'audit.read']
+    name: '运维', perms: ['view', 'asset.write', 'terminal', 'deploy', 'capture', 'speed', 'alarm', 'ai', 'scan', 'session.read', 'audit.read']
   },
   audit: { name: '审计', perms: ['view', 'session.read', 'audit.read', 'alarm', 'ai'] }
 };

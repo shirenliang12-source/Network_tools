@@ -10,46 +10,22 @@
  *   对 enabled 且到点的任务跑一轮（串行，避免抓包争抢）；跑完落盘 pcap + 解析会话入库 + 清理过期数据。
  * 留存：任务可设 retainHours，超时自动删除 pcap 文件与会话库记录（保留策略）。
  */
-const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const store = require('./store');
 const db = require('./db');
 const dpi = require('./dpi');
+const netutil = require('./netutil');
 
 const CAP_DIR = store.CAP_DIR;
 const SCHED_LEAD = 5000;          // 巡检间隔
-const MAX_RUNTIME_MS = 5 * 60 * 1000;
 const running = new Map();        // taskId -> { proc, until }
 let timer = null;
 let sweepTimer = null;
 
 /** 抓包可执行文件：tshark 优先（解析也能用它），其次 dumpcap */
 function capBin() {
-  const cfg = (db.settingsSync() || {}).capture || {};
-  if (cfg.tsharkPath && fs.existsSync(cfg.tsharkPath)) return { bin: cfg.tsharkPath, tool: 'tshark' };
-  const cand = [];
-  if (process.platform === 'win32') {
-    cand.push('C:\\Program Files\\Wireshark\\tshark.exe', 'C:\\Program Files (x86)\\Wireshark\\tshark.exe');
-  } else {
-    cand.push('/usr/bin/tshark', '/usr/local/bin/tshark');
-  }
-  if (process.platform === 'win32') {
-    cand.push('C:\\Program Files\\Wireshark\\dumpcap.exe', 'C:\\Program Files (x86)\\Wireshark\\dumpcap.exe');
-  } else {
-    cand.push('/usr/sbin/dumpcap', '/usr/bin/dumpcap', '/usr/local/sbin/dumpcap');
-  }
-  for (const c of cand) {
-    try {
-      if (c.includes(path.sep)) {
-        if (fs.existsSync(c)) return { bin: c, tool: c.includes('tshark') ? 'tshark' : 'dumpcap' };
-      } else if (process.platform !== 'win32') {
-        const p = require('child_process').execSync(`command -v ${c} 2>/dev/null || which ${c} 2>/dev/null`, { encoding: 'utf8' }).trim();
-        if (p) return { bin: p, tool: c.includes('tshark') ? 'tshark' : 'dumpcap' };
-      }
-    } catch { }
-  }
-  return { bin: null, tool: '' };
+  return netutil.captureEngine();
 }
 
 function env() { return (db.settingsSync() || {}).capture || {}; }
@@ -58,7 +34,7 @@ function env() { return (db.settingsSync() || {}).capture || {}; }
 function info() {
   const r = [];
   const b = capBin();
-  r.push(`旁路采集  ${b.bin ? b.tool + ' 可用 (' + b.bin + ')' : '未检测到 tshark/dumpcap（pcap 模式不可用，可用 device 模式或先装 Wireshark/Npcap）'}`);
+  r.push(`旁路采集  ${b.bin ? b.tool + ' 可用 (' + b.bin + ')' : '未检测到本机抓包后端（仍可使用设备侧采集）'}`);
   return r;
 }
 
@@ -73,39 +49,29 @@ async function runOnce(id) {
 
 async function runPcapOnce(task) {
   const b = capBin();
-  if (!b.bin) return { ok: false, error: '未检测到 tshark/dumpcap，无法本地抓包。可先装 Wireshark/Npcap，或把任务类型改成设备侧采集。' };
+  if (!b.bin) return { ok: false, error: '未检测到本机抓包后端，可把任务类型改成设备侧采集。' };
   const sec = Math.max(1, Math.min(300, Number(task.seconds || 30)));
   const sizeMB = Math.max(1, Number(task.pcapSize || 100));
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const file = path.join(CAP_DIR, `task-${task.id}-${stamp}.pcap`);
-  const args = ['-i', task.iface || '1'];
-  const bpf = (task.bpf || '').trim();
-  if (bpf) args.push('-f', `${bpf}`);
-  args.push('-b', `filesize:${sizeMB * 1024}`);
-  args.push('-a', `duration:${sec}`);
-  if (b.tool === 'tshark') args.push('-a', `filesize:${sizeMB * 1024}`);
-  args.push('-w', file, '-q');
-
+  const wantedFile = path.join(CAP_DIR, `task-${task.id}-${stamp}.pcap`);
   const t0 = Date.now();
-  await new Promise((resolve) => {
-    const p = spawn(b.bin, args, { windowsHide: true });
-    let err = '';
-    p.stdout.on('data', d => { err += d.toString(); });
-    p.stderr.on('data', d => { err += d.toString(); });
-    p.on('error', () => resolve());
-    p.on('close', () => resolve());
-    setTimeout(() => { try { p.kill(); } catch { } }, MAX_RUNTIME_MS);
-  });
-
+  let captured;
+  try {
+    captured = await netutil.captureToFile({ out: wantedFile, iface: task.iface || '1', filter: (task.bpf || '').trim(), seconds: sec, sizeMB });
+  } catch (e) {
+    await db.taskSave({ id: task.id, status: 'error', lastEndedAt: new Date().toISOString() });
+    return { ok: false, error: '抓包失败：' + e.message };
+  }
+  const file = captured.path || wantedFile;
   const exists = fs.existsSync(file);
   const size = exists ? fs.statSync(file).size : 0;
   if (!exists) {
     await db.taskSave({ id: task.id, status: 'error', lastEndedAt: new Date().toISOString() });
-    return { ok: false, error: '抓包未产生文件：' + String(err).slice(0, 200) };
+    return { ok: false, error: '抓包未产生文件：' + String(captured.log || '').slice(-200) };
   }
 
   /* 解析并入库 */
-  const parsed = dpi.parsePcapFile(file);
+  const parsed = /\.pcap$/i.test(file) ? dpi.parsePcapFile(file) : { packets: 0, sessions: [], error: 'PCAPNG 文件等待 TShark 解析' };
   const rows = (parsed.sessions || []).map(s => ({
     id: store.uid('flw_'),
     startedAt: s.startedAt,
@@ -117,7 +83,7 @@ async function runPcapOnce(task) {
   }));
   const inserted = rows.length ? await db.flowInsert(rows) : 0;
   await db.capSave({
-    id: path.basename(file, '.pcap'),
+    id: path.basename(file).replace(/\.[^.]+$/, ''),
     name: task.name,
     path: file,
     size,
@@ -127,7 +93,7 @@ async function runPcapOnce(task) {
     source: task.kind || 'pcap',
     startedAt: new Date(t0).toISOString(),
     endedAt: new Date().toISOString(),
-    ...{ packets: parsed.packets, sessions: rows.length, inserted, taskId: task.id, engine: b.tool }
+    ...{ packets: parsed.packets, sessions: rows.length, inserted, taskId: task.id, engine: captured.engine || b.tool, parseNote: parsed.error || '' }
   });
   await db.taskSave({
     id: task.id,
@@ -137,7 +103,7 @@ async function runPcapOnce(task) {
     lastEndedAt: new Date().toISOString()
   });
   store.audit({ user: 'system', action: 'capture.task.run', target: task.name, detail: `${parsed.packets} 包 / ${rows.length} 会话 / ${(size / 1048576).toFixed(1)}MB` });
-  return { ok: true, file: path.basename(file), size, packets: parsed.packets, sessions: rows.length, inserted, ms: Date.now() - t0 };
+  return { ok: true, file: path.basename(file), size, packets: parsed.packets, sessions: rows.length, inserted, engine: captured.engine || b.tool, ms: Date.now() - t0 };
 }
 
 /** 设备侧采集：SSH 取 MAC/ARP/会话表，结果落库以供后续回溯 */

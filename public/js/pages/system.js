@@ -2,7 +2,7 @@
    系统管理：数据源 / 用户分权 / 凭据库 / AI / 通知 / 审计 / 运行状态
    ========================================================================= */
 (function () {
-  const { ref, reactive, computed, onMounted, onBeforeUnmount } = Vue;
+  const { ref, reactive, computed, watch, onMounted, onBeforeUnmount } = Vue;
   const NC = window.NC, { api, fmt, icon, toast, go } = NC;
 
   const TABS = [
@@ -55,6 +55,26 @@
             <label>请求超时（毫秒）<input class="inp" type="number" v-model="s.datasource.zabbix.timeoutMs"></label>
             <label>忽略 HTTPS 证书验证
               <select class="inp" v-model="s.datasource.zabbix.tlsVerify"><option value="false">忽略</option><option value="true">校验</option></select></label>
+            <div class="result-box" style="grid-column:1/-1">
+              <div class="row gap8" style="align-items:center">
+                <b class="fs13">Zabbix 主机组同步范围</b>
+                <span class="tag">{{ selectedGroupCount ? '仅同步已选 '+selectedGroupCount+' 个组' : '同步全部有权限的组' }}</span>
+                <div class="grow"></div>
+                <input v-if="dsGroups.length" class="inp sm" style="width:180px" v-model.trim="groupKeyword" placeholder="搜索主机组">
+                <button class="btn sm" :disabled="loadingGroups" @click="loadGroups">{{ loadingGroups?'读取中...':'读取主机组' }}</button>
+              </div>
+              <div v-if="filteredDsGroups.length" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));max-height:220px;overflow:auto;margin-top:10px">
+                <label v-for="g in filteredDsGroups" :key="g.id" class="checkbox" style="display:flex;align-items:center;gap:7px">
+                  <input type="checkbox" :value="String(g.id)" v-model="s.datasource.zabbix.groupIds">
+                  <span>{{ g.name }}</span><span class="mono fs11 muted">#{{ g.id }}</span>
+                </label>
+              </div>
+              <div v-else class="fs12 muted" style="margin-top:10px">保存 Zabbix 地址和账号后点击“读取主机组”。未勾选任何组表示同步该账号有权读取的全部受监控主机。</div>
+              <div v-if="selectedGroupCount" class="row gap8 mt8">
+                <button class="btn xs" @click="s.datasource.zabbix.groupIds=[]">清空选择（同步全部）</button>
+                <span class="fs11 muted">同一设备属于多个组时只同步一次，并在设备资产中保留全部组名。</span>
+              </div>
+            </div>
           </div>
           <div class="flex gap8">
             <button class="btn primary" :disabled="testing" @click="testDs">
@@ -62,6 +82,7 @@
               <span v-else v-html="ic('zap',15)+'<span>测试连接</span>'"></span>
             </button>
             <button class="btn" @click="save">保存配置</button>
+            <button v-if="s.datasource.mode==='zabbix'" class="btn" :disabled="syncing" @click="syncDs" v-html="syncing ? '<span>同步中...</span>' : ic('refresh',15)+'<span>立即同步</span>'"></button>
             <div class="grow"></div>
             <span class="fs12 muted" v-if="dsRes">{{ dsRes }}</span>
           </div>
@@ -310,7 +331,29 @@
             <div class="fs11 muted">最近联通：{{ fmt.time((health.datasource||{}).lastOkAt) }}</div></div>
           <div class="result-box"><div class="l fs12 muted">运行时长</div><div class="big" style="font-size:20px">{{ fmt.dur(health.uptimeSec) }}</div><div class="fs11 muted">PID {{ health.pid }}</div></div>
           <div class="result-box"><div class="l fs12 muted">内存占用</div><div class="big lat">{{ health.rssMB }} MB</div><div class="fs11 muted">{{ health.platform }}</div></div>
-          <div class="result-box"><div class="l fs12 muted">抓包引擎</div><div class="big" :style="{fontSize:17, color: health.capture && health.capture.ready ? 'var(--success)':'var(--warn)'}">{{ health.capture && health.capture.ready ? '可用' : '未安装' }}</div><div class="fs11 muted ellipsis">{{ health.capture ? health.capture.engine || '—' : '—' }}</div></div>
+          <div class="result-box"><div class="l fs12 muted">抓包引擎</div><div class="big" :style="{fontSize:17, color: health.capture && health.capture.ready ? 'var(--success)':'var(--warn)'}">{{ health.capture && health.capture.ready ? '可用' : ((health.runtime||{}).elevated===false ? '需管理员权限' : '未就绪') }}</div><div class="fs11 muted ellipsis">{{ health.capture ? health.capture.engine || '—' : '—' }}</div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><span v-html="ic('server',15)"></span><span>网络工具运行时</span>
+            <span class="pill" :class="(health.runtime||{}).busy ? 'blue':'up'">{{ (health.runtime||{}).busy ? '后台部署中' : '自动管理' }}</span>
+            <div class="grow"></div><button class="btn sm" :disabled="(health.runtime||{}).busy" @click="installRuntime">检测并补装</button></div>
+          <div class="fs12 muted mb8">Nmap、TShark、iperf3 由平台后台静默部署；MTR 与 Net-SNMP 已内置。无需单独下载安装。</div>
+          <div class="table-wrap">
+            <table class="ntable">
+              <thead><tr><th style="width:170px">组件</th><th style="width:95px">状态</th><th style="width:110px">版本</th><th>运行位置 / 回退能力</th></tr></thead>
+              <tbody>
+                <tr v-for="t in ((health.runtime||{}).tools||[])" :key="t.id">
+                  <td><b>{{ t.name }}</b><div class="fs11 muted">{{ t.kind==='builtin'?'平台内置':t.kind==='system'?'系统组件':t.kind==='external-license'?'外部驱动':'平台托管' }}</div></td>
+                  <td><span class="tag" :class="t.ready?'green':''">{{ t.ready ? '已就绪' : (t.fallback ? '已回退' : '待部署') }}</span></td>
+                  <td class="mono fs11">{{ t.version || '—' }}</td>
+                  <td class="fs11"><div class="ellipsis" :title="t.path">{{ t.path || '—' }}</div><div v-if="!t.ready && t.fallback" class="muted">回退：{{ t.fallback }}</div></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="hint-line mt8"><span v-html="ic('info',13)"></span><span>Npcap 免费版不支持静默再分发；平台会使用已安装的 Npcap，未安装时自动切换 Windows PktMon，不影响集成抓包。第三方组件从官网或 Windows Package Manager 获取并校验。</span></div>
+          <div v-if="(health.runtime||{}).message" class="fs11 muted mt8 mono">{{ health.runtime.message }}</div>
         </div>
 
         <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px">
@@ -411,8 +454,10 @@
         </div>
       </NcModal>
     </div>`,
-    setup() {
-      const tab = ref('ds');
+    setup(props) {
+      const initialTab = TABS.some(x => x.k === props.query?.tab) ? props.query.tab : 'ds';
+      const tab = ref(initialTab);
+      watch(() => props.query?.tab, v => { if (TABS.some(x => x.k === v)) tab.value = v; });
       // 后端 settings 可能缺子键（旧版本存档），此处补齐默认值，避免模板读 undefined 炸渲染
       const DEF = {
         notify: {
@@ -444,7 +489,8 @@
         { notify: clone(DEF.notify), ai: clone(DEF.ai), terminal: clone(DEF.terminal), capture: clone(DEF.capture), speed: clone(DEF.speed) }));
       const users = ref([]), creds = ref([]), roles = ref([]), myId = ref('');
       const auditRows = ref([]), health = reactive({});
-      const testing = ref(false), dsRes = ref(''), dsErr = ref(''), testingCredId = ref(''), credTest = ref(''), ntRes = ref('');
+      const testing = ref(false), syncing = ref(false), loadingGroups = ref(false), dsRes = ref(''), dsErr = ref(''), testingCredId = ref(''), credTest = ref(''), ntRes = ref('');
+      const dsGroups = ref([]), groupKeyword = ref('');
       const uEdit = ref(null), uForm = reactive({ username: '', displayName: '', role: 'ops', password: '', enabled: true, resetPwd: false });
       const cEdit = ref(null), cForm = reactive({ name: '', kind: 'ssh', vendor: '通用', host: '', port: 22, username: '', secret: '', enable: '', note: '' });
       const af = reactive({ keyword: '', user: '', action: '', from: '', to: '' });
@@ -463,6 +509,11 @@
 
       const userNames = computed(() => [...new Set(auditRows.value.map(r => r.user).filter(Boolean))]);
       const actionNames = computed(() => [...new Set(auditRows.value.map(r => r.action).filter(Boolean))]);
+      const selectedGroupCount = computed(() => Array.isArray(s.datasource?.zabbix?.groupIds) ? s.datasource.zabbix.groupIds.length : 0);
+      const filteredDsGroups = computed(() => {
+        const k = groupKeyword.value.toLowerCase();
+        return dsGroups.value.filter(g => !k || `${g.name} ${g.id}`.toLowerCase().includes(k));
+      });
       const countRows = computed(() => [
         ['用户', (health.counts || {}).users], ['凭据', (health.counts || {}).credentials],
         ['命令模板', (health.counts || {}).templates], ['告警', (health.counts || {}).alarms],
@@ -484,19 +535,22 @@
           myId.value = (NC.state.user || {}).id || '';
           const me = await api.get('/auth/me').catch(() => ({ user: null }));
           myId.value = (me.user || {}).id || myId.value;
+          if (s.datasource.mode === 'zabbix') loadGroups().catch(() => {});
         } catch (e) { toast('加载系统配置失败：' + e.message, 'err'); }
       }
       function loadSettings(st) {
         st = st || {};
         Object.assign(s.site, st.site || {});
         Object.assign(s.datasource, st.datasource || {});
+        s.datasource.zabbix = s.datasource.zabbix || {};
+        if (!Array.isArray(s.datasource.zabbix.groupIds)) s.datasource.zabbix.groupIds = [];
         mergeDeep(s.notify, st.notify); mergeDeep(s.ai, st.ai);
         mergeDeep(s.terminal, st.terminal);
         Object.assign(s.capture, st.capture || {});
         Object.assign(s.speed, st.speed || {});
         dangerText.value = (Array.isArray(s.terminal.dangerPatterns) ? s.terminal.dangerPatterns : (st.terminal || {}).dangerPatterns || []).join('\n');
       }
-      async function save() {
+      async function persistSettings(quiet = false) {
         try {
           s.terminal.dangerPatterns = dangerText.value.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
           const b = {
@@ -505,17 +559,41 @@
           };
           const r = await api.put('/system/settings', b);
           loadSettings(r.settings);
-          toast('系统配置已保存', 'ok');
-        } catch (e) { toast(e.message, 'err'); }
+          if (!quiet) toast('系统配置已保存', 'ok');
+          return true;
+        } catch (e) { toast(e.message, 'err'); return false; }
       }
+      const save = () => persistSettings(false);
 
       /* ------------------------ 数据源 ------------------------ */
+      async function loadGroups() {
+        loadingGroups.value = true; dsErr.value = '';
+        try {
+          const r = await api.get('/system/datasource/groups');
+          dsGroups.value = r.rows || [];
+          if (!Array.isArray(s.datasource.zabbix.groupIds)) s.datasource.zabbix.groupIds = r.selected || [];
+          if (r.mode !== 'zabbix') dsErr.value = '请先保存并启用 Zabbix 数据源';
+        } catch (e) { dsErr.value = e.message; }
+        finally { loadingGroups.value = false; }
+      }
       async function testDs() {
         testing.value = true; dsRes.value = ''; dsErr.value = '';
         try {
+          if (!(await persistSettings(true))) return;
           const r = await api.get('/system/datasource/test');
-          dsRes.value = `模式 ${r.mode} · 版本 ${r.version || '-'} · 设备 ${r.hostCount} 台`;
+          dsRes.value = `模式 ${r.mode} · 版本 ${r.version || '-'} · 主机组 ${r.groupCount || 0} 个 · 当前范围设备 ${r.hostCount} 台`;
+          if (r.mode === 'zabbix') await loadGroups();
         } catch (e) { dsErr.value = e.message; } finally { testing.value = false; }
+      }
+      async function syncDs() {
+        syncing.value = true; dsRes.value = ''; dsErr.value = '';
+        try {
+          if (!(await persistSettings(true))) return;
+          const r = await api.post('/system/datasource/sync', {});
+          dsRes.value = `同步完成 · ${r.hostCount} 台设备 · ${r.groups.join('、')} · ${fmt.time(r.syncedAt)}`;
+          toast('Zabbix 数据同步完成', 'ok');
+        } catch (e) { dsErr.value = e.message; }
+        finally { syncing.value = false; }
       }
 
       /* ------------------------ 用户 ------------------------ */
@@ -661,6 +739,14 @@
 
       /* ------------------------ 健康 ------------------------ */
       async function loadHealth() { try { const r = await api.get('/system/health'); Object.assign(health, r); } catch (e) { } }
+      async function installRuntime() {
+        try {
+          const r = await api.post('/system/runtime/install', {});
+          if (r.runtime) health.runtime = r.runtime;
+          toast(r.message || '已开始后台补装', 'ok');
+          setTimeout(loadHealth, 1500);
+        } catch (e) { toast(e.message, 'err'); }
+      }
 
       onMounted(async () => { await load(); loadAudit(); loadHealth(); loadCert(); });
       let t = setInterval(loadHealth, 30000);
@@ -668,12 +754,13 @@
 
       return {
         TABS: TABS_, tab, s, users, creds, roles, myId, auditRows, health,
-        testing, dsRes, dsErr, testingCredId, credTest, ntRes,
+        testing, syncing, loadingGroups, dsGroups, groupKeyword, dsRes, dsErr, testingCredId, credTest, ntRes,
         uEdit, uForm, editUser, saveUser, resetPwd, delUser,
         cEdit, cForm, editCred, saveCred, testCred, delCred,
         af, loadAudit, exportAudit, userNames, actionNames,
-        dangerText, save, testDs, testNotify, askAi,
-        countRows, storageRows, recentAudit, loadHealth,
+        selectedGroupCount, filteredDsGroups,
+        dangerText, save, testDs, loadGroups, syncDs, testNotify, askAi,
+        countRows, storageRows, recentAudit, loadHealth, installRuntime,
         certStatus, files, uploading, certMsg, certMsgOk, onCertPick, uploadCert, removeCert,
         ic, fmt, go
       };

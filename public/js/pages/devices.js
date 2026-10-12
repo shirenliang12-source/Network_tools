@@ -34,6 +34,12 @@
         </div>
       </div>
 
+      <div class="hint-line row gap8" style="align-items:center" :style="{borderColor: meta.datasource.mode==='demo'?'#f59e0b':'#22c55e'}">
+        <span v-html="ic(meta.datasource.mode==='demo'?'alert':'database',14)"></span>
+        <span><b>当前数据来源：{{ meta.datasource.label || '加载中' }}</b> · {{ meta.datasource.description || '正在读取数据源状态…' }}</span>
+        <div class="grow"></div><button class="btn sm" @click="go('/system?tab=ds')">数据源设置</button>
+      </div>
+
       <div class="card">
         <div class="filter-bar">
           <div class="search-box">
@@ -59,6 +65,7 @@
                 <th class="sortable" @click="sortBy('name')">设备名称 <span v-if="f.sort==='name'">{{ f.order==='asc'?'↑':'↓' }}</span></th>
                 <th>管理地址</th>
                 <th>厂商 / 型号</th>
+                <th>数据来源</th>
                 <th>区域</th>
                 <th>角色</th>
                 <th class="sortable" @click="sortBy('uptimeSec')">运行时长</th>
@@ -71,8 +78,8 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-if="loading"><td colspan="12"><div class="tbl-empty">加载中…</div></td></tr>
-              <tr v-else-if="!rows.length"><td colspan="12"><div class="tbl-empty">没有匹配的设备</div></td></tr>
+              <tr v-if="loading"><td colspan="13"><div class="tbl-empty">加载中…</div></td></tr>
+              <tr v-else-if="!rows.length"><td colspan="13"><div class="tbl-empty">没有匹配的设备</div></td></tr>
               <tr v-for="h in rows" :key="h.host" @click="detail(h)" style="cursor:pointer">
                 <td>
                   <div class="row gap8">
@@ -88,6 +95,9 @@
                   <div>{{ h.vendor }}</div>
                   <div class="fs11 dim">{{ h.model }}</div>
                 </td>
+                <td><span class="tag" :style="{color:h.source==='demo'?'#b45309':'#15803d'}">{{ h.sourceLabel }}</span>
+                  <div v-if="h.groupNames?.length" class="fs11 muted mt8" :title="h.groupNames.join('、')">{{ h.source==='zabbix' ? 'Zabbix 主机组' : '平台分组' }}：{{ h.groupNames.join('、') }}</div>
+                  <div v-if="h.overriddenFields?.length" class="fs11 muted mt8">本地覆盖 {{ h.overriddenFields.length }} 项</div></td>
                 <td><span class="tag">{{ h.zone }}</span></td>
                 <td><span class="tag" :class="roleTag(h.role)">{{ h.role }}</span></td>
                 <td class="fs12 muted nowrap">{{ fmt.dur(h.uptimeSec) }}</td>
@@ -105,7 +115,7 @@
                   <div class="btn-group">
                     <button class="btn sm" @click="detail(h)">详情</button>
                     <button class="btn sm" @click="openTerm(h)" v-html="ic('terminal',13)+'<span>终端</span>'"></button>
-                    <button class="btn sm" @click="edit(h)" v-html="ic('edit',13)"></button>
+                    <button v-if="canEdit" class="btn sm" @click="edit(h)" v-html="ic('edit',13)+'<span>编辑</span>'"></button>
                   </div>
                 </td>
               </tr>
@@ -115,8 +125,17 @@
         <nc-pager :page="page" :size="f.size" :total="total" @update:page="p => reload(p)" />
       </div>
 
-      <nc-drawer v-if="editing" :title="'编辑设备补充信息 · ' + editing.name" @close="editing=null">
+      <nc-drawer v-if="editing" wide :title="'编辑设备资产 · ' + editing.name" @close="editing=null">
+        <div class="hint-line row gap8" style="margin-top:0;align-items:center">
+          <span v-html="ic('database',13)"></span><span>设备标识 <b class="mono">{{ editing.host }}</b> · 来源 {{ editing.sourceLabel }}。留空的基础字段继续跟随数据源，本地填写的内容优先展示。</span>
+        </div>
         <div class="form-grid">
+          <div><label class="fs12 muted">显示名称</label><input class="inp mt8" v-model="form.name" placeholder="留空则使用数据源名称"></div>
+          <div><label class="fs12 muted">管理地址</label><input class="inp mt8 mono" v-model="form.ip" placeholder="IPv4 / IPv6 / 主机名"></div>
+          <div><label class="fs12 muted">厂商</label><input class="inp mt8" v-model="form.vendor" placeholder="Cisco / 华为 / H3C"></div>
+          <div><label class="fs12 muted">设备型号</label><input class="inp mt8" v-model="form.model" placeholder="设备型号"></div>
+          <div><label class="fs12 muted">系统版本</label><input class="inp mt8" v-model="form.os" placeholder="操作系统 / 固件版本"></div>
+          <div><label class="fs12 muted">序列号</label><input class="inp mt8 mono" v-model="form.serial" placeholder="设备序列号"></div>
           <div><label class="fs12 muted">区域 / 位置</label><input class="inp mt8" v-model="form.zone" placeholder="如：研发楼3F弱电间"></div>
           <div><label class="fs12 muted">设备角色</label>
             <select class="inp mt8" v-model="form.role"><option>核心</option><option>汇聚</option><option>接入</option><option>防火墙</option><option>路由器</option><option>其他</option></select>
@@ -125,8 +144,9 @@
           <div><label class="fs12 muted">机柜位置</label><input class="inp mt8" v-model="form.rack" placeholder="如：A-12-03"></div>
           <div class="full"><label class="fs12 muted">备注</label><textarea class="inp mt8" rows="3" v-model="form.note"></textarea></div>
         </div>
-        <div class="hint-line">补充信息保存在本系统（不写回 Zabbix），用于拓扑分组与责任归属。设备本身名称、IP、型号来自数据源。</div>
+        <div class="hint-line">所有编辑内容保存在平台资产库，不会写回 Zabbix；运行状态、CPU、内存、温度和端口指标始终以采集源为准。</div>
         <template #foot>
+          <button class="btn" @click="resetOverrides">恢复跟随数据源</button>
           <button class="btn" @click="editing=null">取消</button>
           <button class="btn primary" @click="saveInv">保存</button>
         </template>
@@ -136,9 +156,13 @@
       const f = reactive({ keyword: props.query.keyword || '', zone: '', vendor: '', role: '', status: '', sort: 'name', order: 'asc', size: 20 });
       const rows = ref([]), total = ref(0), page = ref(1), loading = ref(true);
       const opts = reactive({ zones: [], vendors: [], roles: [] });
-      const meta = reactive({ total: 0, online: 0, offline: 0, avgCpu: 0, avgHealth: 0 });
+      const meta = reactive({ total: 0, online: 0, offline: 0, avgCpu: 0, avgHealth: 0, datasource: { mode: '', label: '', description: '' } });
       const editing = ref(null), form = reactive({});
-      const ic = (n) => icon(n);
+      const ic = (n, s) => icon(n, s);
+      const canEdit = computed(() => {
+        const p = NC.state.user?.perms || [];
+        return p.includes('*') || p.includes('asset.write');
+      });
 
       const roleTag = (r) => ({ '核心': 'violet', '汇聚': 'blue', '接入': 'green', '防火墙': 'amber' }[r] || '');
       const healthColor = (v) => v >= 80 ? 'var(--success)' : v >= 55 ? 'var(--warn)' : 'var(--danger)';
@@ -151,6 +175,7 @@
           const r = await api.get('/devices?' + q);
           rows.value = r.rows; total.value = r.total;
           Object.assign(opts, r.meta);
+          Object.assign(meta.datasource, r.meta?.datasource || {});
           meta.total = r.total;
           meta.online = r.rows.filter(h => h.status === 1).length;
           meta.offline = r.rows.length - meta.online;
@@ -166,20 +191,35 @@
       const openTerm = (h) => go('/terminal?host=' + encodeURIComponent(h.host));
       const edit = (h) => {
         editing.value = h;
-        Object.assign(form, { zone: h.zone, role: h.role, owner: h.owner, rack: h.rack, note: h.note });
+        Object.assign(form, {
+          name: h.name, ip: h.ip, vendor: h.vendor, model: h.model, os: h.os, serial: h.serial,
+          zone: h.zone, role: h.role, owner: h.owner, rack: h.rack, note: h.note
+        });
       };
       const saveInv = async () => {
         try {
-          await api.post(`/devices/${encodeURIComponent(editing.value.host)}/inventory`, { ...form });
+          const source = editing.value.sourceValues || {};
+          const payload = {};
+          for (const k of ['name', 'ip', 'vendor', 'model', 'os', 'serial', 'zone', 'role', 'owner', 'rack', 'note']) {
+            payload[k] = String(form[k] ?? '') === String(source[k] ?? '') ? '' : form[k];
+          }
+          await api.post(`/devices/${encodeURIComponent(editing.value.host)}/inventory`, payload);
           toast('设备信息已更新', 'ok');
           editing.value = null; reload();
         } catch (e) { toast(e.message, 'err'); }
       };
+      const resetOverrides = () => Object.assign(form, editing.value?.sourceValues || {});
       const exportCsv = () => { NC.setTokenToken || 0; window.open('/api/devices/export?token=' + encodeURIComponent(NC.state.token)); };
 
-      onMounted(() => reload(1));
+      onMounted(async () => {
+        await reload(1);
+        if (props.query.edit) {
+          const h = rows.value.find(x => x.host === props.query.edit);
+          if (h && canEdit.value) edit(h);
+        }
+      });
       watch(() => props.query.keyword, v => { if (v !== undefined) { f.keyword = v; reload(1); } });
-      return { f, rows, total, page, loading, opts, meta, editing, form, reload, sortBy, reset, detail, openTerm, edit, saveInv, exportCsv, ic, roleTag, healthColor, fmt, go };
+      return { f, rows, total, page, loading, opts, meta, editing, form, canEdit, reload, sortBy, reset, detail, openTerm, edit, saveInv, resetOverrides, exportCsv, ic, roleTag, healthColor, fmt, go };
     }
   };
 
@@ -201,8 +241,10 @@
                     <span class="pill" :class="host.status ? 'up' : 'down'">{{ host.status ? '在线' : '离线' }}</span>
                     <span class="tag" :class="roleTag(host.role)">{{ host.role }}</span>
                     <span class="tag">{{ host.zone }}</span>
+                    <span class="tag" :style="{color:host.source==='demo'?'#b45309':'#15803d'}">{{ host.sourceLabel }}</span>
                   </div>
                   <div class="fs12 muted mt8 mono">{{ host.host }} · {{ host.ip }} · {{ host.vendor }} {{ host.model }}</div>
+                  <div v-if="host.groupNames?.length" class="fs12 muted mt8">{{ host.source==='zabbix' ? 'Zabbix 主机组' : '平台分组' }}：{{ host.groupNames.join('、') }}</div>
                 </div>
               </div>
               <div class="grid mt16" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
@@ -229,7 +271,11 @@
                 <div class="fs12 muted">综合健康度</div>
               </div>
               <div class="btn-group col" style="gap:8px">
+                <button v-if="canEdit" class="btn primary" @click="go('/devices?edit='+encodeURIComponent(host.host))" v-html="ic('edit',15)+'<span>编辑资产</span>'"></button>
                 <button class="btn" @click="openTerm" v-html="ic('terminal',15)+'<span>打开终端</span>'"></button>
+                <button class="btn" @click="openAlarms" v-html="ic('bell',15)+'<span>查看告警</span>'"></button>
+                <button class="btn" @click="openTroubleshoot" v-html="ic('search',15)+'<span>发起排障</span>'"></button>
+                <button class="btn" @click="openTraffic" v-html="ic('activity',15)+'<span>会话流量</span>'"></button>
                 <button class="btn" @click="go('/devices')" v-html="ic('list',15)+'<span>返回列表</span>'"></button>
               </div>
             </div>
@@ -337,7 +383,7 @@
           <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
             <div>
               <div class="fs13 fw6 mb12">基础信息</div>
-              <div class="d-row" v-for="kv in infoRows" :key="kv[0]" style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
+              <div v-for="kv in infoRows" :key="kv[0]" style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
                 <span class="muted fs12">{{ kv[0] }}</span><span class="mono fs12">{{ kv[1] || '-' }}</span>
               </div>
             </div>
@@ -364,12 +410,19 @@
       const tab = ref('ports'), range = ref('24h');
       const pk = ref(''), pState = ref(''), pMode = ref(''), onlyTop = ref(false);
       const hist = reactive({ traffic: [], cpu: [], mem: [], temp: [] });
-      const ic = (n) => icon(n);
+      const ic = (n, s) => icon(n, s);
       const hostName = () => props.params.host;
       const roleTag = (r) => ({ '核心': 'violet', '汇聚': 'blue', '接入': 'green', '防火墙': 'amber' }[r] || '');
       const healthColor = (v) => v >= 80 ? 'var(--success)' : v >= 55 ? 'var(--warn)' : 'var(--danger)';
       const barW = (v, sp) => Math.min(100, (Number(v) || 0) / ((sp || 1000) * 1e6) * 100) + '%';
       const openTerm = () => go('/terminal?host=' + encodeURIComponent(host.value.host));
+      const openAlarms = () => go('/alarms?host=' + encodeURIComponent(host.value.host));
+      const openTroubleshoot = () => go('/troubleshoot?host=' + encodeURIComponent(host.value.host));
+      const openTraffic = () => go('/traffic?host=' + encodeURIComponent(host.value.host));
+      const canEdit = computed(() => {
+        const p = NC.state.user?.perms || [];
+        return p.includes('*') || p.includes('asset.write');
+      });
 
       const shownPorts = computed(() => {
         let list = ports.value;
@@ -383,7 +436,7 @@
       });
       const infoRows = computed(() => {
         const h = host.value; if (!h) return [];
-        return [['设备标识 HostID', h.hostid], ['设备名', h.name], ['管理地址', h.ip], ['厂商', h.vendor], ['型号', h.model], ['系统版本', h.os],
+        return [['设备标识 HostID', h.hostid], ['数据来源', h.sourceLabel], [h.source === 'zabbix' ? 'Zabbix 主机组' : '平台分组', (h.groupNames || []).join('、') || '-'], ['设备名', h.name], ['管理地址', h.ip], ['厂商', h.vendor], ['型号', h.model], ['系统版本', h.os],
           ['序列号', h.serial], ['区域', h.zone], ['角色', h.role], ['责任人', h.owner], ['机柜', h.rack], ['运行时长', fmt.dur(h.uptimeSec)],
           ['端口总数', ports.value.length], ['备注', h.note]];
       });
@@ -460,13 +513,13 @@
         const a = document.createElement('a'); a.href = url; a.download = `${hostName()}-ports.csv`; a.click(); URL.revokeObjectURL(url);
       };
       onMounted(load);
-      return { host, ports, det, sum, tab, range, pk, pState, pMode, onlyTop, hist, shownPorts, infoRows, optTraffic, optTopPorts, optRes, loadHistory, exportPorts, ic, roleTag, healthColor, barW, openTerm, go, fmt };
+      return { host, ports, det, sum, tab, range, pk, pState, pMode, onlyTop, hist, shownPorts, infoRows, optTraffic, optTopPorts, optRes, canEdit, loadHistory, exportPorts, ic, roleTag, healthColor, barW, openTerm, openAlarms, openTroubleshoot, openTraffic, go, fmt };
     }
   };
 
   window.PAGES = window.PAGES || {};
   window.PAGES.DevicesPage = DevicesPage;
   window.PAGES.DeviceDetailPage = DeviceDetailPage;
-  NC.route('/devices', { title: '设备管理', comp: 'DevicesPage' });
+  NC.route('/devices', { title: '设备资产', comp: 'DevicesPage' });
   NC.route('/device/:host', { title: '设备详情', comp: 'DeviceDetailPage' });
 })();

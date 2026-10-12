@@ -68,7 +68,6 @@
 
   /* ------------------------------ 图标库 ------------------------------ */
   const P = {
-    dashboard: '<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
     server: '<rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><line x1="6" y1="6.5" x2="6.01" y2="6.5"/><line x1="6" y1="17.5" x2="6.01" y2="17.5"/>',
     terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
     activity: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
@@ -128,10 +127,15 @@
 
   /* ------------------------------ API 客户端 ------------------------------ */
   const TOKEN_KEY = 'netops.token';
+  const DEFAULT_ROUTE = '/toolbox';
+  function routeFromHash() {
+    const raw = location.hash.replace(/^#/, '') || DEFAULT_ROUTE;
+    return raw;
+  }
   const S = reactive({
     token: localStorage.getItem(TOKEN_KEY) || '',
-    user: null, site: { name: '网络运维控制台', subtitle: 'Network Operations Console' },
-    route: location.hash.replace(/^#/, '') || '/screen',
+    user: null, site: { name: '网络运维工具平台', subtitle: 'Network Operations Toolkit' },
+    route: routeFromHash(),
     sidebarCollapsed: localStorage.getItem('netops.sb') === '1',
     alarmCount: 0, criticalCount: 0,
     datasourceMode: 'demo',
@@ -180,7 +184,7 @@
   const routes = {};
   function route(path, def) { routes[path] = def; }
   function go(path) { location.hash = path; }
-  window.addEventListener('hashchange', () => { S.route = location.hash.replace(/^#/, '') || '/screen'; });
+  window.addEventListener('hashchange', () => { S.route = routeFromHash(); });
   const currentRoute = computed(() => {
     const p = S.route.split('?')[0];
     if (routes[p]) return { path: p, def: routes[p], query: parseQuery(S.route) };
@@ -199,7 +203,7 @@
         }
       }
     }
-    return { path: '/screen', def: routes['/screen'] || { title: '大屏', comp: null }, query: {} };
+    return { path: DEFAULT_ROUTE, def: routes[DEFAULT_ROUTE] || { title: '告警中心', comp: null }, query: {} };
   });
   function parseQuery(str) {
     const q = {};
@@ -219,18 +223,33 @@
     template: `<div ref="el" :style="{width:'100%',height:height}"></div>`,
     setup(props, { emit }) {
       const el = ref(null);
-      let inst = null;
+      let inst = null, observer = null;
       const draw = () => {
         if (!el.value || !props.option) return;
+        const box = el.value.getBoundingClientRect();
+        // v-show 隐藏标签页时宽高为 0；等 ResizeObserver 在页签显示后再初始化。
+        if (box.width < 20 || box.height < 20) return;
         if (!inst) {
           inst = echarts.init(el.value, null, { renderer: 'canvas' });
           inst.on('click', (p) => emit('click', p));
         }
+        inst.resize({ width: box.width, height: box.height, silent: true });
         inst.setOption(props.option, true);
       };
       const resize = () => inst && inst.resize();
-      onMounted(() => { draw(); window.addEventListener('resize', resize); });
-      onBeforeUnmount(() => { window.removeEventListener('resize', resize); if (inst) { inst.dispose(); inst = null; } });
+      onMounted(() => {
+        nextTick(draw);
+        window.addEventListener('resize', resize);
+        if (window.ResizeObserver) {
+          observer = new ResizeObserver(() => nextTick(draw));
+          observer.observe(el.value);
+        }
+      });
+      onBeforeUnmount(() => {
+        window.removeEventListener('resize', resize);
+        if (observer) { observer.disconnect(); observer = null; }
+        if (inst) { inst.dispose(); inst = null; }
+      });
       watch(() => props.option, () => nextTick(draw), { deep: true });
       return { el };
     }
@@ -278,7 +297,7 @@
           <h3>{{ title }}</h3>
           <button class="icon-btn" @click="$emit('close')" v-html="ic('close')"></button>
         </div>
-        <div class="modal-body"><slot></slot></div>
+        <div class="modal-body"><slot name="body"><slot></slot></slot></div>
         <div class="modal-foot">
           <slot name="foot">
             <button class="btn" @click="$emit('close')" :disabled="loading">{{ cancelText }}</button>

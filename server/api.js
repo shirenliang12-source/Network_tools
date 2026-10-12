@@ -11,7 +11,6 @@ const capture = require('./capture');
 const customProto = require('./custom-proto');
 const flowGraph = require('./flow-graph');
 const multipart = require('./multipart');
-const dashboard = require('./dashboard');
 const troubleshoot = require('./troubleshoot');
 const deepTools = require('./deep-tools');
 const scanner = require('./scanner');
@@ -23,7 +22,9 @@ const notify = require('./notify');
 const term = require('./term');
 const toolbox = require('./toolbox');
 const toolboxScan = require('./toolbox-scan');
+const snmpTools = require('./snmp-tools');
 const wifi = require('./wifi');
+const runtimeTools = require('./runtime-tools');
 const path = require('path');
 const fs = require('fs');
 
@@ -35,18 +36,31 @@ const R = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch(e => {
 /* --------------------------- 通用：主机公开化 --------------------------- */
 async function pubHost(h) {
   const inv = await db.inventoryGet(h.host);
+  const source = h.source || ds.getProvider().name || 'unknown';
   return {
-    hostid: h.hostid, host: h.host, name: h.name || h.host, ip: h.ip,
+    hostid: h.hostid, host: h.host, name: inv.name || h.name || h.host, ip: inv.ip || h.ip,
     status: h.status, available: h.available, error: h.error || '',
     maintenance: !!h.maintenance,
-    vendor: h.vendor || inv.vendor || '', model: h.model || inv.model || '', os: h.os || '',
-    serial: h.serial || '', location: h.location || inv.zone || '',
+    vendor: inv.vendor || h.vendor || '', model: inv.model || h.model || '', os: inv.os || h.os || '',
+    serial: inv.serial || h.serial || '', location: inv.zone || h.location || '',
     zone: inv.zone || h.location || (h.tags && h.tags.zone) || '未分组',
     role: inv.role || (h.tags && h.tags.role) || inferRole(h),
     uptimeSec: h.uptimeSec, cpu: h.cpu, mem: h.mem, temp: h.temp,
     portCount: h.portCount || null,
     health: ds.healthScore(h),
     note: inv.note || '', owner: inv.owner || '', rack: inv.rack || '',
+    source, sourceLabel: source === 'zabbix' ? 'Zabbix 实时采集' : source === 'demo' ? '平台演示数据' : '平台本地数据',
+    groups: Array.isArray(h.groups) ? h.groups : [],
+    groupNames: Array.isArray(h.groups) ? h.groups.map(g => g.name).filter(Boolean) : [],
+    sourceUpdatedAt: inv.updatedAt || null,
+    sourceValues: {
+      name: h.name || h.host, ip: h.ip || '', vendor: h.vendor || '', model: h.model || '',
+      os: h.os || '', serial: h.serial || '', zone: h.location || (h.tags && h.tags.zone) || '',
+      role: (h.tags && h.tags.role) || inferRole(h), owner: '', rack: '', note: ''
+    },
+    localOverrides: Object.fromEntries(['name', 'ip', 'vendor', 'model', 'os', 'serial', 'zone', 'role', 'owner', 'rack', 'note']
+      .filter(k => inv[k] !== undefined && inv[k] !== '').map(k => [k, inv[k]])),
+    overriddenFields: ['name', 'ip', 'vendor', 'model', 'os', 'serial', 'zone', 'role', 'owner', 'rack', 'note'].filter(k => inv[k] !== undefined && inv[k] !== ''),
     x: inv.x, y: inv.y
   };
 }
@@ -88,115 +102,6 @@ router.post('/auth/password', auth.authRequired, R(async (req, res) => {
   res.json({ ok: true });
 }));
 
-/* ============================== 大屏总览 ============================== */
-router.get('/overview', auth.authRequired, R(async (req, res) => {
-  const hosts = await allHosts();
-  const problems = await ds.cached('problems', 20, async () => {
-    const p = await ds.getProvider().problems();
-    const local = (await db.alarmsList()).filter(a => a.status !== 'closed');
-    const map = new Map();
-    for (const x of [...p, ...local]) if (!map.has(x.eventid || x.id)) map.set(x.eventid || x.id, x);
-    return [...map.values()].sort((a, b) => (b.clock || 0) - (a.clock || 0));
-  });
-  const active = problems.filter(p => p.status !== 'resolved' && p.status !== 'closed');
-  const sevCount = active.reduce((a, p) => (a[p.severity] = (a[p.severity] || 0) + 1, a), {});
-  const online = hosts.filter(h => h.status === 1).length;
-
-  const portAgg = { total: 0, up: 0, down: 0, err: 0 };
-  const topTraffic = [];
-  for (const h of hosts.slice(0, 14)) {
-    try {
-      const { ports } = await ds.cached('ports:' + h.host, 25, () => ds.getProvider().ports(h.host));
-      portAgg.total += ports.length;
-      portAgg.up += ports.filter(p => p.operStatus === 1).length;
-      portAgg.down += ports.filter(p => p.operStatus !== 1).length;
-      portAgg.err += ports.reduce((a, p) => a + (p.inErrors || 0) + (p.outErrors || 0) + (p.crcErrors || 0), 0);
-      const total = ports.reduce((a, p) => a + (p.inBps || 0) + (p.outBps || 0), 0);
-      topTraffic.push({ host: h.host, name: h.name, total, util: ports.length ? +Math.min(100, ports.reduce((a, p) => a + (p.util || 0), 0) / ports.length).toFixed(1) : 0 });
-    } catch { }
-  }
-  topTraffic.sort((a, b) => b.total - a.total);
-
-  const trend = await ds.getProvider().history(hosts[0]?.hostid, 'traffic', store.nowSec() - 86400, store.nowSec(), 96).catch(() => []);
-  const health = { good: 0, warn: 0, bad: 0 };
-  hosts.forEach(h => { if (h.health >= 80) health.good++; else if (h.health >= 55) health.warn++; else health.bad++; });
-
-  res.json({
-    ok: true,
-    kpi: {
-      total: hosts.length, online, offline: hosts.length - online,
-      alarms: active.length, critical: (sevCount.disaster || 0) + (sevCount.high || 0),
-      ports: portAgg, health, avgUtil: topTraffic.length ? +(topTraffic.reduce((a, t) => a + t.util, 0) / topTraffic.length).toFixed(1) : 0
-    },
-    sevCount,
-    hosts: hosts.map(h => ({ host: h.host, name: h.name, ip: h.ip, status: h.status, health: h.health, cpu: h.cpu, mem: h.mem, temp: h.temp, role: h.role, zone: h.zone, vendor: h.vendor, model: h.model, uptimeSec: h.uptimeSec })),
-    alarms: active.slice(0, 30),
-    topTraffic: topTraffic.slice(0, 10),
-    trend,
-    datasource: { mode: ds.getProvider().name }
-  });
-}));
-
-router.get('/overview/trend', auth.authRequired, R(async (req, res) => {
-  const range = String(req.query.range || '24h');
-  const mins = { '1h': 60, '6h': 360, '24h': 1440, '7d': 10080 }[range] || 1440;
-  const to = store.nowSec(), from = to - mins * 60;
-  const host = req.query.host || (await allHosts())[0]?.hostid;
-  const kind = String(req.query.kind || 'traffic');
-  const data = await ds.getProvider().history(host, kind, from, to, mins > 1000 ? 240 : 120).catch(() => []);
-  res.json({ ok: true, kind, range, host, data });
-}));
-
-/* ============================== 可编辑大屏 ============================== */
-// 数据源目录（前端组件面板挑选）
-router.get('/dashboard/sources', auth.authRequired, R(async (req, res) => {
-  res.json({ ok: true, sources: dashboard.SOURCES });
-}));
-// 单组件取数
-router.get('/dashboard/data', auth.authRequired, R(async (req, res) => {
-  const source = String(req.query.source || '');
-  const params = {};
-  for (const k of Object.keys(req.query)) if (k !== 'source') params[k] = req.query[k];
-  const d = await dashboard.getData(source, params);
-  res.json(Object.assign({ ok: !d.error, source }, d.error ? { error: d.error } : d));
-}));
-// 列表 / 新建
-router.get('/dashboards', auth.authRequired, R(async (req, res) => {
-  res.json({ ok: true, list: await dashboard.listDashboards(), active: (await db.settingsGet()).activeDashboard });
-}));
-router.post('/dashboards', auth.requirePerm('auth'), R(async (req, res) => {
-  const d = await dashboard.createDashboard(String((req.body || {}).name || ''));
-  auth.logAction(req, 'dashboard.create', d.id, d.name);
-  res.json({ ok: true, dashboard: d });
-}));
-// 详情
-router.get('/dashboards/:id', auth.authRequired, R(async (req, res) => {
-  const d = await dashboard.getDashboard(req.params.id);
-  if (!d) return res.status(404).json({ ok: false, error: '大屏不存在' });
-  res.json({ ok: true, dashboard: d });
-}));
-// 更新（布局/组件/主题/刷新）
-router.put('/dashboards/:id', auth.requirePerm('auth'), R(async (req, res) => {
-  const d = await dashboard.updateDashboard(req.params.id, req.body || {});
-  if (!d) return res.status(404).json({ ok: false, error: '大屏不存在' });
-  auth.logAction(req, 'dashboard.update', req.params.id, d.name);
-  res.json({ ok: true, dashboard: d });
-}));
-// 删除（禁删内置）
-router.delete('/dashboards/:id', auth.requirePerm('auth'), R(async (req, res) => {
-  const ok = await dashboard.deleteDashboard(req.params.id);
-  if (!ok) return res.status(400).json({ ok: false, error: '内置大屏不可删除' });
-  auth.logAction(req, 'dashboard.delete', req.params.id, '');
-  res.json({ ok: true });
-}));
-// 激活（设为当前展示大屏）
-router.post('/dashboards/:id/activate', auth.requirePerm('auth'), R(async (req, res) => {
-  const ok = await dashboard.activateDashboard(req.params.id);
-  if (!ok) return res.status(404).json({ ok: false, error: '大屏不存在' });
-  auth.logAction(req, 'dashboard.activate', req.params.id, '');
-  res.json({ ok: true });
-}));
-
 /* ============================== 设备管理 ============================== */
 router.get('/devices', auth.authRequired, R(async (req, res) => {
   let list = await allHosts();
@@ -216,21 +121,40 @@ router.get('/devices', auth.authRequired, R(async (req, res) => {
   });
   const page = Math.max(1, Number(req.query.page || 1)), size = Math.min(200, Number(req.query.size || 20));
   const all = await allHosts();
+  const provider = ds.getProvider();
+  const settings = await db.settingsGet();
+  const actualMode = provider.name || 'demo';
   res.json({
     ok: true, total: list.length, page, size,
     rows: list.slice((page - 1) * size, page * size),
     meta: {
       zones: [...new Set(all.map(h => h.zone))].filter(Boolean).sort(),
       vendors: [...new Set(all.map(h => h.vendor))].filter(Boolean).sort(),
-      roles: [...new Set(all.map(h => h.role))].filter(Boolean).sort()
+      roles: [...new Set(all.map(h => h.role))].filter(Boolean).sort(),
+      datasource: {
+        mode: actualMode,
+        label: actualMode === 'zabbix' ? 'Zabbix 实时数据' : '演示数据',
+        description: actualMode === 'zabbix'
+          ? ((settings.datasource?.zabbix?.groupIds || []).length
+            ? `仅同步已选的 ${(settings.datasource.zabbix.groupIds || []).length} 个 Zabbix 主机组；页面编辑内容作为平台本地覆盖，不写回 Zabbix。`
+            : '同步当前账号有权限访问的全部 Zabbix 主机组；页面编辑内容作为平台本地覆盖，不写回 Zabbix。')
+          : '当前未连接真实监控源，设备、端口和曲线来自平台内置模拟数据。请在系统管理 → 数据源中配置 Zabbix。',
+        configuredMode: settings.datasource?.mode || 'demo',
+        lastOkAt: settings.datasource?.lastOkAt || null,
+        lastError: settings.datasource?.lastError || '',
+        selectedGroupIds: settings.datasource?.zabbix?.groupIds || [],
+        lastSyncAt: settings.datasource?.lastSyncAt || null,
+        lastSyncCount: settings.datasource?.lastSyncCount || 0,
+        lastSyncGroups: settings.datasource?.lastSyncGroups || []
+      }
     }
   });
 }));
 
 router.get('/devices/export', auth.authRequired, R(async (req, res) => {
   const list = await allHosts();
-  const head = ['设备名', '主机ID', '管理IP', '厂商', '型号', '区域', '角色', '运行时长', '状态', '健康度', 'CPU%', '内存%', '温度℃', '序列号', '系统版本'];
-  const rows = list.map(h => [h.name, h.host, h.ip, h.vendor, h.model, h.zone, h.role, ds.human(h.uptimeSec), h.status ? '在线' : '离线', h.health, h.cpu ?? '', h.mem ?? '', h.temp ?? '', h.serial, h.os]);
+  const head = ['设备名', '主机ID', '管理IP', '厂商', '型号', '数据来源', '数据源分组', '区域', '角色', '责任人', '机柜', '运行时长', '状态', '健康度', 'CPU%', '内存%', '温度℃', '序列号', '系统版本'];
+  const rows = list.map(h => [h.name, h.host, h.ip, h.vendor, h.model, h.sourceLabel, (h.groupNames || []).join('、'), h.zone, h.role, h.owner, h.rack, ds.human(h.uptimeSec), h.status ? '在线' : '离线', h.health, h.cpu ?? '', h.mem ?? '', h.temp ?? '', h.serial, h.os]);
   const csv = '\ufeff' + [head, ...rows].map(r => r.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
   auth.logAction(req, 'device.export', 'all', `${list.length} 台`);
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -275,11 +199,19 @@ router.get('/devices/:host/history', auth.authRequired, R(async (req, res) => {
   res.json({ ok: true, range, data: out });
 }));
 
-router.post('/devices/:host/inventory', auth.required || auth.authRequired, auth.requirePerm('view'), R(async (req, res) => {
+router.post('/devices/:host/inventory', auth.authRequired, auth.requirePerm('asset.write'), R(async (req, res) => {
   const host = req.params.host;
   const b = req.body || {};
-  const invRow = await db.inventorySet(host, b);
-  auth.logAction(req, 'device.inventory.update', host, JSON.stringify(b).slice(0, 300));
+  const current = (await allHosts()).find(x => x.host === host);
+  if (!current) return res.status(404).json({ ok: false, error: '设备不存在' });
+  const allowed = ['name', 'ip', 'vendor', 'model', 'os', 'serial', 'zone', 'role', 'owner', 'rack', 'note'];
+  const patch = {};
+  for (const k of allowed) if (b[k] !== undefined) patch[k] = String(b[k] ?? '').trim().slice(0, k === 'note' ? 1000 : 200);
+  patch.updatedAt = new Date().toISOString();
+  patch.updatedBy = req.user.username;
+  const invRow = await db.inventorySet(host, patch);
+  ds.cacheClear();
+  auth.logAction(req, 'device.inventory.update', host, JSON.stringify(patch).slice(0, 500));
   res.json({ ok: true, inventory: invRow });
 }));
 
@@ -565,13 +497,13 @@ router.get('/session/flow', auth.requirePerm('view'), R(async (req, res) => {
 }));
 
 router.get('/capture/diagnose', auth.authRequired, R(async (req, res) => {
-  const exe = netutil.findTshark();
+  const eng = netutil.captureEngine();
   res.json({
     ok: true,
-    engine: exe ? (/(dumpcap)/i.test(exe) ? 'dumpcap' : 'tshark') : null,
-    path: exe || '',
-    ready: !!exe,
-    hint: exe ? '' : '未检测到 Wireshark/Npcap。安装 Wireshark（勾选 Npcap）后即可在本机抓包；否则可使用"设备侧抓包"向交换机/防火墙下发抓包命令。',
+    engine: eng.tool || null,
+    path: eng.bin || '',
+    ready: !!eng.bin,
+    hint: eng.bin ? (eng.tool === 'pktmon' ? '正在使用 Windows 内置 PktMon 抓包，平台会自动转换并交给 TShark 解析。' : '') : '未检测到本机抓包后端，可使用设备侧抓包。',
     interfaces: await netutil.listInterfaces(),
     localInterfaces: netutil.localInterfaces()
   });
@@ -579,7 +511,7 @@ router.get('/capture/diagnose', auth.authRequired, R(async (req, res) => {
 
 router.post('/capture/start', auth.requirePerm('capture'), R(async (req, res) => {
   const { iface, filter = '', seconds = 15, host = '', engine = 'auto' } = req.body || {};
-  if (engine === 'device' || (engine === 'auto' && !netutil.findTshark() && host)) {
+  if (engine === 'device' || (engine === 'auto' && !netutil.captureEngine().bin && host)) {
     const hosts = await allHosts();
     const h = hosts.find(x => x.host === host);
     const cred = h ? await pickCred(h) : null;
@@ -626,10 +558,10 @@ router.get('/capture/list', auth.requirePerm('view'), R(async (req, res) => {
 
 router.get('/capture/:id/download', auth.requirePerm('view'), R(async (req, res) => {
   const id = req.params.id.replace(/[^\w-]/g, '');
-  const p = path.join(store.CAP_DIR, `${id}.pcap`);
-  if (!fs.existsSync(p)) return res.status(404).json({ ok: false, error: '文件不存在' });
+  const p = [path.join(store.CAP_DIR, `${id}.pcap`), path.join(store.CAP_DIR, `${id}.pcapng`)].find(fs.existsSync);
+  if (!p) return res.status(404).json({ ok: false, error: '文件不存在' });
   auth.logAction(req, 'capture.download', id, '');
-  res.download(p, `${id}.pcap`);
+  res.download(p, path.basename(p));
 }));
 
 /* =============================== 内网测速 =============================== */
@@ -801,7 +733,8 @@ router.put('/system/settings', auth.requirePerm('*') ? auth.requirePerm('admin')
   if (body.datasource) {
     const z = body.datasource.zabbix || {};
     const oldZ = cur.datasource.zabbix;
-    body.datasource.zabbix = { ...oldZ, ...z, password: z.password === '******' ? oldZ.password : (z.password !== undefined ? store.encrypt(z.password) : oldZ.password) };
+    const groupIds = Array.isArray(z.groupIds) ? [...new Set(z.groupIds.map(String).filter(Boolean))].slice(0, 200) : (oldZ.groupIds || []);
+    body.datasource.zabbix = { ...oldZ, ...z, groupIds, password: z.password === '******' ? oldZ.password : (z.password !== undefined ? store.encrypt(z.password) : oldZ.password) };
   }
   if (body.notify?.smtp) body.notify.smtp.pass = keep(cur.notify.smtp.pass, body.notify.smtp.pass);
   if (body.ai) body.ai.apiKey = keep(cur.ai.apiKey, body.ai.apiKey);
@@ -816,14 +749,47 @@ router.get('/system/datasource/test', auth.requirePerm('view'), R(async (req, re
   const p = ds.getProvider();
   try {
     const v = await p.health();
-    const hosts = await p.hosts();
+    const [hosts, groups] = await Promise.all([p.hosts(), p.hostGroups()]);
     await db.settingsUpdate({ datasource: { lastOkAt: new Date().toISOString(), lastError: '' } });
     auth.logAction(req, 'datasource.test', p.name, `OK ${v}`);
-    res.json({ ok: true, mode: p.name, version: v, hostCount: hosts.length });
+    res.json({ ok: true, mode: p.name, version: v, hostCount: hosts.length, groupCount: groups.length,
+      selectedGroupIds: ((await db.settingsGet()).datasource?.zabbix?.groupIds || []) });
   } catch (e) {
     await db.settingsUpdate({ datasource: { lastError: e.message } });
     auth.logAction(req, 'datasource.test', p.name, e.message, 'fail');
     res.status(502).json({ ok: false, mode: p.name, error: e.message });
+  }
+}));
+
+router.get('/system/datasource/groups', auth.requirePerm('view'), R(async (req, res) => {
+  const p = ds.getProvider();
+  if (p.name !== 'zabbix') return res.json({ ok: true, mode: p.name, rows: [], selected: [] });
+  const rows = await p.hostGroups();
+  const cfg = (await db.settingsGet()).datasource || {};
+  res.json({ ok: true, mode: p.name, rows, selected: cfg.zabbix?.groupIds || [] });
+}));
+
+router.post('/system/datasource/sync', auth.authRequired, R(async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok: false, error: '仅管理员可执行数据源同步' });
+  const p = ds.getProvider();
+  if (p.name !== 'zabbix') return res.status(400).json({ ok: false, error: '当前不是 Zabbix 数据源' });
+  ds.cacheClear();
+  try {
+    const [version, groups, hosts] = await Promise.all([p.health(), p.hostGroups(), p.hosts()]);
+    const cfg = (await db.settingsGet()).datasource || {};
+    const selected = cfg.zabbix?.groupIds || [];
+    const selectedNames = selected.length
+      ? groups.filter(g => selected.includes(String(g.id))).map(g => g.name)
+      : ['全部有权限的主机组'];
+    const at = new Date().toISOString();
+    await db.settingsUpdate({ datasource: { lastOkAt: at, lastSyncAt: at, lastSyncCount: hosts.length, lastSyncGroups: selectedNames, lastError: '' } });
+    ds.cacheClear();
+    await allHosts();
+    auth.logAction(req, 'datasource.sync', 'zabbix', `${selectedNames.join('、')} · ${hosts.length} 台`);
+    res.json({ ok: true, mode: p.name, version, hostCount: hosts.length, groups: selectedNames, syncedAt: at });
+  } catch (e) {
+    await db.settingsUpdate({ datasource: { lastError: e.message } });
+    throw e;
   }
 }));
 
@@ -945,6 +911,7 @@ router.post('/system/notify/test', auth.authRequired, R(async (req, res) => {
 
 router.get('/system/health', auth.authRequired, R(async (req, res) => {
   const st = await db.status();
+  const runtime = runtimeTools.status();
   const dirs = { data: store.DATA_DIR, recordings: store.REC_DIR, captures: store.CAP_DIR };
   const sizes = {};
   for (const [k, d] of Object.entries(dirs)) {
@@ -969,9 +936,16 @@ router.get('/system/health', auth.authRequired, R(async (req, res) => {
       recordings: store.listRecordings({ limit: 9999 }).length
     },
     storageBytes: sizes,
-    capture: { engine: netutil.findTshark() || '', ready: !!netutil.findTshark() },
-    iperf: netutil.findIperf() || ''
+    capture: { engine: runtime.captureEngine, ready: runtime.captureReady },
+    iperf: netutil.findIperf() || '',
+    runtime
   });
+}));
+
+router.post('/system/runtime/install', auth.requirePerm('admin'), R(async (req, res) => {
+  runtimeTools.bootstrap({ force: true }).catch(e => console.error('[runtime] 手动补装失败：', e.message));
+  auth.logAction(req, 'runtime.install', 'network-tools', '后台静默补装');
+  res.json({ ok: true, message: '已开始后台检测与静默补装', runtime: runtimeTools.status() });
 }));
 
 /* ====================== TLS 证书管理（Web 上传） ====================== */
@@ -1439,7 +1413,7 @@ router.get('/capture/tasks', auth.requirePerm('capture'), R(async (req, res) => 
       bin: b.bin || '',
       ready: !!b.bin,
       ifaces: netutil.localInterfaces().filter(i => !i.internal),
-      hint: b.bin ? '' : '未检测到 tshark/dumpcap。可安装 Wireshark/Npcap 以启用本地旁路抓包；或把任务改成设备侧采集（device）。'
+      hint: b.bin ? (b.tool === 'pktmon' ? 'Windows 内置 PktMon 已接管实时抓包；TShark 在后台自动部署后用于协议解析。' : '') : `${b.reason || '未检测到本机抓包后端'}，可把任务改成设备侧采集（device）。`
     }
   });
 }));
@@ -1712,6 +1686,19 @@ function resolvePorts(v, fallback = '22,80,443,3389,445') {
   return s;
 }
 
+/** 扫描高级参数统一清洗；不接受原始命令行，避免把自定义能力变成命令注入入口。 */
+function scanAdvanced(b = {}, previous = {}) {
+  const discoveryPorts = scanner.parsePorts(b.discoveryPorts ?? previous.discoveryPorts ?? scanner.DISCOVER_PORTS.join(','))
+    .slice(0, 64).join(',');
+  return {
+    discoveryPorts: discoveryPorts || scanner.DISCOVER_PORTS.join(','),
+    excludeTargets: String(b.excludeTargets ?? previous.excludeTargets ?? '').trim().slice(0, 2000),
+    retries: Math.max(0, Math.min(3, Number(b.retries ?? previous.retries ?? 0) || 0)),
+    reverseDns: (b.reverseDns ?? previous.reverseDns) !== false,
+    note: String(b.note ?? previous.note ?? '').trim().slice(0, 200)
+  };
+}
+
 router.get('/scan/presets', auth.authRequired, R(async (req, res) => {
   res.json({
     ok: true,
@@ -1754,6 +1741,7 @@ router.post('/scan/tasks', auth.requirePerm('scan'), R(async (req, res) => {
     banner: b.banner !== false,
     intervalSec: Number(b.intervalSec || 3600),
     retainHours: Number(b.retainHours || 72),
+    data: scanAdvanced(b),
     enabled: !!b.enabled,
     status: 'idle'
   });
@@ -1777,6 +1765,8 @@ router.put('/scan/tasks/:id', auth.requirePerm('scan'), R(async (req, res) => {
     patch.ports = portsText;
   }
   if (patch.banner !== undefined) patch.banner = !!patch.banner;
+  const advancedKeys = ['discoveryPorts', 'excludeTargets', 'retries', 'reverseDns', 'note'];
+  if (advancedKeys.some(k => b[k] !== undefined)) patch.data = scanAdvanced(b, cur.data || {});
   const row = await db.scanTaskSave({ ...patch, id: cur.id });
   auth.logAction(req, 'scan.task.update', cur.name, Object.keys(patch).join(','));
   res.json({ ok: true, task: row });
@@ -1812,12 +1802,16 @@ router.post('/scan/quick', auth.requirePerm('scan'), R(async (req, res) => {
   const b = req.body || {};
   const targets = String(b.targets || '').trim();
   if (!targets) return res.status(400).json({ ok: false, error: '扫描目标必填，例如 10.252.28.0/24 或 192.168.1.1-50' });
+  const ports = resolvePorts(b.ports);
+  if (!scanner.parsePorts(ports).length) return res.status(400).json({ ok: false, error: '端口范围不合法，示例：22,80,443 或 1000-2000' });
+  const advanced = scanAdvanced(b);
   const r = await scanner.quick(targets, {
-    ports: resolvePorts(b.ports),
+    ports,
     discoverMode: String(b.discoverMode || 'tcp'),
     banner: b.banner !== false,
     concurrency: Number(b.concurrency || 60),
-    timeoutMs: Number(b.timeoutMs || 1200)
+    timeoutMs: Number(b.timeoutMs || 1200),
+    ...advanced
   }, req.user.username);
   auth.logAction(req, 'scan.quick', targets, `存活 ${r.alive} / 开放端口 ${r.openPorts} / ${r.ms}ms`);
   res.json(r);
@@ -2193,10 +2187,9 @@ router.post('/diag/tasks/:id/toggle', auth.requirePerm('scan'), R(async (req, re
   res.json({ ok: true, task: row });
 }));
 
-/* ============================== 网络运维工具箱 (NetToolbox 移植) ==============================
- * 12 个跨平台工具：重定向链追踪 / HTTP 可用性 / SSL 证书 / Whois / 公网出口 /
- * Ping 详版 / MTR / DNS 诊断 / 服务与 OS 指纹 / 网卡流量 / NTP / 子网计算 / WoL。
- * 主动探测类（ping/mtr/fingerprint/wol）需要 scan 权限，其余登录即可用。
+/* ============================== 网络运维工具箱 ==============================
+ * 内置实现覆盖 curl / OpenSSL / dig / MTR / Nmap / Net-SNMP 等常见运维工作流。
+ * 主动探测和设备查询需要 scan 权限，其余纯计算或本机只读工具登录即可使用。
  * 所有工具函数自身已返回 { ok, ... }，路由原样下发并写入审计日志。
  */
 const toolboxRoutes = [
@@ -2217,6 +2210,8 @@ const toolboxRoutes = [
     return toolbox.subnetAnalyze(String(b.spec || ''));
   }, b => String(b.spec || b.cidr || b.a || '')],
   ['/toolbox/wol',         'scan', 'wol',         b => toolbox.wolWake(b.macs, b.opts || {}),                              b => (Array.isArray(b.macs) ? b.macs.join(',') : String(b.macs || ''))],
+  ['/toolbox/snmp-get',    'scan', 'snmp.get',    b => snmpTools.get(b),                                                   b => String(b.host || '')],
+  ['/toolbox/snmp-walk',   'scan', 'snmp.walk',   b => snmpTools.walk(b),                                                  b => String(b.host || '')],
 ];
 for (const [routePath, perm, action, handler, targetFn] of toolboxRoutes) {
   const mw = perm === 'scan' ? auth.requirePerm('scan') : auth.authRequired;

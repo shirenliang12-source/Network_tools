@@ -188,9 +188,9 @@
         </div>
       </NcModal>
     </div>`,
-    setup() {
+    setup(props) {
       const rows = ref([]), total = ref(0), stats = reactive({ disaster: 0, high: 0, average: 0, warning: 0, information: 0 });
-      const f = reactive({ severity: '', status: '', host: '', keyword: '' });
+      const f = reactive({ severity: '', status: '', host: String((props.query && props.query.host) || ''), keyword: '' });
       const w = reactive({ page: 1, size: 20 });
       const hosts = ref([]), auto = ref(false), unack = ref(0);
       const cur = ref(null), advice = ref('');
@@ -317,5 +317,5 @@
 
   window.PAGES = window.PAGES || {};
   window.PAGES.AlarmsPage = AlarmsPage;
-  NC.route('/alarms', { title: '告警管理', comp: 'AlarmsPage' });
+  NC.route('/alarms', { title: '告警中心', comp: 'AlarmsPage' });
 })();

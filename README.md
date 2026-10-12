@@ -1,6 +1,25 @@
-# 网络分析与监控运维控制台（netops-console）
+# 网络运维与故障排除工具平台（netops-console）
 
-面向企业/园区网络的**纯内网可跑**的运维门户：Zabbix 数据接入 + 大屏可视化 + 设备管理 + Web 终端与配置下发 + 会话流量分析 + 抓包诊断 + 内网测速 + 告警与通知推送 + AI 智能助手。
+面向企业、园区和数据中心网络的**纯内网可运行**运维工具平台。产品默认进入工具箱，不包含运营大屏或展示型模块；所有页面都服务于网络发现、设备查询、故障定位、配置操作、抓包分析和处置闭环。
+
+内置能力按行业常用工作流组织：
+
+| 主流工具/方法 | 平台内置能力 |
+| --- | --- |
+| Nmap | 主机发现、端口扫描、Banner/服务/OS 指纹、暴露面检查 |
+| MTR / traceroute / ping | 连通性、逐跳延迟、丢包与抖动定位 |
+| dig / nslookup | 多记录类型、多 DNS 服务器一致性与劫持检查 |
+| curl / OpenSSL | HTTP 可用性、重定向链、响应头、TLS 证书与加密套件 |
+| Net-SNMP | SNMP v1/v2c/v3 GET 与 WALK（只读，不提供 SET） |
+| Wireshark / tshark | 抓包任务、PCAP 解析、协议识别、会话回溯与性能指标 |
+| iperf3 | TCP/UDP 吞吐测试，并提供无外部依赖的内置测速引擎 |
+| SSH / 厂商 CLI | Web 终端、命令模板、批量下发、预检查、录像与审计 |
+
+### 工具运行时：随平台自动就绪
+
+Windows 首次启动后，平台会在后台检测并静默部署 **Nmap 7.991、TShark/Wireshark 4.6.9、iperf3 3.22**，运行文件与状态统一放在 `data/runtime/`，无需用户逐个下载安装。下载来自项目官网或 Windows Package Manager；Nmap 与 Wireshark 安装包会做 SHA-256 校验。MTR 使用平台内置的逐跳丢包/延迟引擎，Net-SNMP 使用内置 `net-snmp` 模块，所以这两项从首次启动起即可使用。打包版首次启动会统一申请一次 Windows 管理员权限，用于本机抓包和受 UAC 保护的工具部署，不会再弹出各软件自己的安装向导。
+
+Npcap 免费版的许可与安装器不支持第三方产品静默再分发，因此平台不会绕过其授权限制：本机已有 Npcap 时使用 **TShark + Npcap** 实时采集；未安装时自动使用 Windows 自带 **PktMon** 抓包，再转为 PCAP/PCAPNG 交给 TShark 解析。Nmap 的免费 Windows 静默安装器同样要求机器已存在 Npcap；不满足时平台保留已校验的官方安装包并自动启用内置 TCP/ICMP/端口扫描器，不影响扫描功能，拥有 Npcap/Nmap OEM 授权的部署可直接静默启用原生 Nmap。两种抓包后端都在平台页面内完成，不需要另开软件。可在「系统管理 → 运行状态 → 网络工具运行时」查看部署进度或一键重试；设 `AUTO_INSTALL_TOOLS=0` 可关闭后台部署。
 
 - 技术栈：Node.js 20+ / Express 5 / WebSocket / ssh2，前端 Vue 3 + ECharts（**零构建**，直接从 `node_modules` 静态映射，无外网也能跑）
 - 数据存储：不依赖外部数据库，全部落在 `data/` 目录，备份即打包该文件夹
@@ -9,21 +28,32 @@
 
 ## 一、快速开始
 
-### 方式 0：Windows 单文件 EXE（最省事，适合自己用 / 发给同事）
+### 方式 0：正式发布包（Windows / Linux / Docker / macOS）
 
-双击 `dist\netops-console.exe` 即可，**不需要装 Node.js**，也不用执行 `npm install`。
+GitHub Releases 提供四套部署包：
+
+| 发布包 | 内容 | 启动方式 |
+| --- | --- | --- |
+| Windows x64 | 单文件 EXE + 启动脚本 | 双击 `启动平台.cmd` |
+| Linux x64 | 单文件二进制 + systemd 安装脚本 | `sudo ./install.sh` |
+| Docker | Dockerfile + Compose + 完整源码 | `docker compose up -d --build` |
+| macOS | Apple Silicon 与 Intel 双架构、ad-hoc 签名二进制 | 双击 `start.command` |
+
+四种版本都不需要用户逐项配置平台依赖。Windows 会在首次启动后后台检测工具；Linux 安装脚本和 Docker 镜像会安装 Nmap、TShark、MTR、iperf3、Net-SNMP；macOS 包提供一键 Homebrew 工具安装脚本，平台自身的回退能力无需这些外部命令也可启动。
+
+Windows 解压后双击 `启动平台.cmd` 即可，**不需要装 Node.js**，也不用执行 `npm install`。
 
 - 服务就绪后自动打开 `http://127.0.0.1:8787`，关闭黑窗口即停止服务
 - 数据（账号、凭据、测速记录、抓包索引、审计日志）写在 **exe 所在目录的 `data\` 文件夹**里
 - **不要把 exe 放在 `C:\Program Files\` 等只读目录**，那样启动会报「数据目录不可用」。放到桌面、D 盘、项目目录等普通可写位置即可
 
-重新打包（改过 `server/` 或 `public/` 之后需要）：
+重新打包四个平台二进制（改过 `server/` 或 `public/` 之后需要）：
 
 ```bash
-npm run build          # 产出 dist\netops-console.exe（约 60~80 MB，已内置 Node 运行时）
+npm run build          # 产出 dist/bin 下的 Windows、Linux、macOS x64/arm64 二进制
 ```
 
-打包依赖 [pkg](https://github.com/vercel/pkg)，首次执行会从网上下载 Node 基础运行时（约 37 MB），需要能联网。缓存目录是 `C:\Users\<你>\.pkg-cache`。
+打包依赖仍在维护的 [@yao-pkg/pkg](https://github.com/yao-pkg/pkg)，首次执行会从网上下载 Node 基础运行时（约 37 MB），需要能联网。缓存目录是 `C:\Users\<你>\.pkg-cache`。
 
 已知限制：
 
@@ -159,13 +189,14 @@ DATABASE_URL=postgres://postgres:密码@127.0.0.1:5432/netops node server/index.
 
 | 能力 | admin | ops | audit |
 |---|:---:|:---:|:---:|
-| 大屏 / 设备 / 端口 / 详情 / 拓扑 查看 | ✅ | ✅ | ✅ |
+| 设备 / 端口 / 详情 / 拓扑 查看 | ✅ | ✅ | ✅ |
 | Web 终端连接 | ✅ | ✅ | ❌ |
 | 命令模板与批量配置下发 | ✅ | ✅ | ❌ |
 | 会话录像读取与回放 | ✅ | ✅ | ✅ |
 | 抓包发起与 pcap 下载 | ✅ | ✅ | ❌ |
 | 内网测速（内置吞吐 / 探测） | ✅ | ✅ | ❌ |
 | 网络扫描发起与任务管理 | ✅ | ✅ | ❌ |
+| SNMP GET / WALK 设备查询 | ✅ | ✅ | ❌ |
 | 扫描结果读取（主机 / 端口 / 统计 / 报告） | ✅ | ✅ | ✅ |
 | 诊断工具箱发起（摄像头 / IP 冲突 / 环路 / 日志审计 / 测速 / DHCP） | ✅ | ✅ | ❌ |
 | 诊断结果读取（问题清单 / 主机 / 审计日志 / 历史） | ✅ | ✅ | ✅ |
@@ -194,14 +225,16 @@ DATABASE_URL=postgres://postgres:密码@127.0.0.1:5432/netops node server/index.
 | 超时 | 默认 15000 ms，Zabbix 卡顿时调大 |
 | TLS 校验 | 用自签证书的内网 Zabbix 关掉即可 |
 
-3. 点 **测试连接**，看到返回设备数即成功 → 点 **保存**（保存后自动切换 Provider 并清空缓存）
-4. 回**大屏 / 设备管理**刷新，数据即来自 Zabbix
+3. 点 **测试连接**，平台会读取 Zabbix 主机组；勾选需要纳管的组（可多选）。不勾选表示同步当前 API 账号有权限访问的全部组
+4. 点 **立即同步**，同步结果会回显设备数、主机组和完成时间；保存后同步范围持续生效
+5. 回**告警中心 / 设备资产**刷新，数据即来自 Zabbix，资产列表与详情均会显示所属主机组
 
 对接要点：
 
 - 数据源切换后，端口列表会优先读取 Zabbix 中已配置的 Item（对外网口/CPU/内存/温度），读不到的数据项自动回退到演示值，不会白屏
-- 所有 Zabbix 查询带 **25 秒 TTL 缓存**，大屏 5 秒自动刷新也不会把 Zabbix 打爆
-- 每次取数失败会在「系统管理 → 运行状态」显示 `lastError`，并在大屏顶部提示
+- 主机组筛选直接传给 Zabbix `host.get`，只拉取选中组中的设备；同一设备属于多个组选中时只保留一条，并完整展示组归属
+- 所有 Zabbix 查询带 **25 秒 TTL 缓存**，频繁查看设备与告警也不会把 Zabbix 打爆
+- 每次取数失败会在「系统管理 → 运行状态」显示 `lastError`，页面会给出错误提示
 
 ---
 
@@ -258,11 +291,11 @@ DATABASE_URL=postgres://postgres:密码@127.0.0.1:5432/netops node server/index.
 
 ### 抓包三种模式
 
-1. **自动**：本机装了 Wireshark/Npcap（能找到 tshark）就用本机抓
-2. **本机抓包**：选网卡 + BPF 过滤条件（如 `host 10.252.28.101 and port 443`）+ 时长，抓完可在页面下载 `.pcap`，直接用 Wireshark 打开
+1. **自动**：有 Npcap 时使用 TShark，没有 Npcap 时自动切换 Windows PktMon，不要求用户单独安装
+2. **本机抓包**：选网卡 + BPF 过滤条件（如 `host 10.252.28.101 and port 443`）+ 时长，抓完可在页面下载 `.pcap` / `.pcapng`，直接回溯分析
 3. **设备侧抓包**：填目标设备 IP，程序按厂商生成抓包命令下发（Cisco `monitor capture` / 华为·H3C `capture-packet` / Fortinet `diagnose sniffer packet` / Palo Alto `debug dataplane packet-diag`），可复制命令手动去设备上敲
 
-> **没装 Wireshark 也能用**：系统检测不到 tshark 时自动降级到设备侧抓包，或在「系统管理 → 终端与测速 → 抓包引擎」里手动指定 tshark 路径。
+> **没装 Wireshark/Npcap 也能用**：平台启动后会后台部署 TShark；部署完成前或没有 Npcap 时，Windows PktMon 会直接接管实时抓包。若系统不提供 PktMon，再降级为设备侧抓包。
 
 ---
 
@@ -274,7 +307,7 @@ DATABASE_URL=postgres://postgres:密码@127.0.0.1:5432/netops node server/index.
 
 | 能力 | 说明 |
 |---|---|
-| 两种采集源 | **旁路抓包**：本机网卡镜像，用 tshark/dumpcap 滚动抓；**设备侧采集**：SSH 周期拉交换机 MAC/ARP 表 |
+| 两种采集源 | **旁路抓包**：本机网卡镜像，自动用 TShark/Npcap 或 PktMon 滚动抓；**设备侧采集**：SSH 周期拉交换机 MAC/ARP 表 |
 | 滚动轮转 | 按时长（`duration`）与文件大小（`filesize`）双条件自动切文件，不会撑爆磁盘 |
 | 周期执行 | 服务每 5 秒巡检一次，到点自动跑；任务可单独启停 |
 | 自动留存 | 按 `retainHours` 定时清理过期 pcap 与会话记录（保留策略随时可改） |
@@ -355,6 +388,8 @@ DATABASE_URL=postgres://postgres:密码@127.0.0.1:5432/netops node server/index.
 - **发现方式**：`tcp`（扫常用端口判断能否连上，最快，零依赖，大网段首选）/ `icmp`（真实 ping，准但慢，一个地址一次探测）/ `mixed`（先 TCP 摸存活再补 ping 拿时延）/ `auto`（有 nmap 走 `nmap -sn`，没有自动退回 tcp）
 - **端口**：直接写 `22,80,443` 或 `1000-2000`，也能填预设名（常用端口 / Web 服务 / 数据库 / Windows / 工控·IoT / 网络管理）
 - 并发与超时可调；默认并发 60、单连接超时 1200ms。扫描结束会做一次**主机名反查**（主机数 ≤ 64 时才做，避免 DNS 拖慢整轮）
+- **自定义参数**：可单独指定 TCP 存活发现端口、排除 IP / 区间 / CIDR、失败重试 0～3 次、开关 Banner 指纹与反向 DNS，并记录工单号或变更窗口备注；平台只接收结构化参数，不开放原始命令行入口
+- **快速扫描回传**：扫描完成后不再只弹一个计数，而是直接显示可用率、存活/离线、开放端口、高危主机、平均时延、服务分布、主机明细和处置建议，并可继续进入完整报告下钻
 
 **结果怎么落地（四项打通）**
 
@@ -421,9 +456,9 @@ DATABASE_URL=postgres://postgres:密码@127.0.0.1:5432/netops node server/index.
 
 ---
 
-## 十、大屏与设备详情
+## 十、设备资产与网络拓扑
 
-**/screen 大屏可视化**：顶部 KPI（设备总数 / 在线 / 离线 / 活动告警 / 严重告警）+ 全网端口流量趋势曲线 + 在线率环形图 + 设备流量排行 + 设备健康度榜 + 实时告警列表 + 关键端口矩阵，支持 WebSocket 实时推送，投到大屏/电视上直接看。
+登录后默认进入 **/alarms 告警中心**，导航按「监控与资产 → 操作与排障 → 流量可观测 → 网络检测 → 平台管理」组织，优先支持值班人员从问题发现进入设备定位与处置流程。
 
 **/devices 设备管理**：设备列表（厂商/型号/IP/区域/角色/在线/健康度/CPU/内存/温度/运行时长），支持关键词搜索、按角色筛选、端口速览、导出 CSV、点进详情。
 
@@ -453,7 +488,7 @@ node tools/migrate.js --check --url postgres://...       # 指定连接串体检
 
 Windows 双击 `check.bat` 会依次跑完三段：后端模块自检 → 前端模板编译自检 → 端到端接口自检。它会先探测 8787 端口，没起服务就自动拉起并等待就绪，任一段失败会停在出错处不继续。
 
-`e2e.js` 会模拟真实前端调用，覆盖认证 / 总览设备 / 告警 / 终端下发 / 会话流量 / 旁路采集任务 / 全流量回溯 / 网络扫描 / **诊断工具箱** / 测速 / 系统管理 / AI 拓扑 / 权限校验，共 **98 项断言**，最后一行输出 `=== 自检完成：通过 98 项，失败 0 项 ===`。
+`e2e.js` 会模拟真实前端调用，覆盖认证 / 设备 / 告警 / 终端下发 / 会话流量 / 旁路采集任务 / 全流量回溯 / 网络扫描 / **诊断工具箱** / 测速 / 系统管理 / AI 拓扑 / 权限校验；断言数量会随工具扩展，以脚本最后的通过/失败统计为准。
 
 `netdiag-smoke.js` 是诊断引擎的离线自检（不碰数据库、不需要服务）：手工拼 ARP / IPv4-UDP / DHCP Offer 等字节验证帧级解码器，验证 Syslog 的 RFC3164 / RFC5424 解析、12 条审计规则的命中与阈值聚合、双模式目标展开（含「截断时保住本机地址」这条约束）。
 
@@ -468,8 +503,8 @@ Windows 双击 `check.bat` 会依次跑完三段：后端模块自检 → 前端
 | 启动报 `Missing parameter name` | Express 5 不再支持 `app.get('*')`，代码已用 `/*splat`，确认版本是 express 5 |
 | 页面白屏 / 控制台报 `Vue is not defined` | `node_modules/vue` 缺失，跑一次 `npm install` |
 | 终端连不上真机 | 凭据库点「测试」看具体报错；常见为 22 端口未通、账号仅允许反向 Telnet、VPN 未连 |
-| 抓包提示找不到网卡 | 本机没装 Npcap，切到「设备侧抓包」模式 |
-| 环路/DHCP 检测报没找到网卡数据 | 这两个检测靠本机抓包，需要装 Npcap/Wireshark（`tshark` 装在 `C:\Program Files\Wireshark`）；没装的时间接技能降级但不报错，环路/DHCP 会拿不到证据 |
+| 抓包提示没有权限 | PktMon 需要管理员权限；请以管理员运行平台，或切到「设备侧抓包」模式 |
+| 环路/DHCP 检测暂时没有网卡数据 | 首次启动时 TShark 可能仍在后台部署；到「系统管理 → 运行状态」查看进度，完成后重试 |
 | Syslog 开了却收不到日志 | 报 `EADDRINUSE / EACCES` 多为 514 被系统占用或非管理员；改用 5140 等高位端口，并让设备指向该端口 |
 | 测速跑不出速度 | 确认测的是同一网段的两台机器；跨 VPN 会受封包开销影响，实测回环 4.8~5.5 Gbps 属正常 |
 | 数据不刷新 | 数据源有 25 秒缓存，等 30 秒或去「系统管理 → 数据源」重新保存一次 |
@@ -500,11 +535,11 @@ netops-console/
 │  └─ repo-pg.js        # PostgreSQL 实现（连接池、JSONB、批量写入）
 ├─ public/
 │  ├─ index.html
-│  ├─ css/app.css       # 设计系统（深色大屏 + 浅色业务双主题令牌）
+│  ├─ css/app.css       # 运维业务页面设计系统
 │  └─ js/
 │     ├─ core.js        # 请求封装、路由、格式化、通用组件（NcChart/NcTable…）
 │     ├─ app.js         # 布局、侧边栏、登录、全局状态
-│     └─ pages/         # screen / devices / terminal / traffic / speed / alarms
+│     └─ pages/         # devices / terminal / traffic / speed / alarms
 │                       # / topology / system / flow / capture / scan / diag
 ├─ tools/
 │  ├─ smoke.js          # 后端模块自检

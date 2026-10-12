@@ -469,12 +469,21 @@ async function api(path, { method = 'GET', body = null, token = TOKEN } = {}) {
 async function login() {
   // 先试默认管理员，失败再试 ops / audit
   const cands = [
+    { username: 'admin', password: 'admin@123' },
     { username: 'admin', password: 'admin123' },
     { username: 'admin', password: '123456' }
   ];
   for (const c of cands) {
-    const r = await api('/api/auth/login', { method: 'POST', body: c, token: '' });
-    if (r.data && r.data.ok && r.data.token) { ADMIN = r.data.token; return { role: 'admin', token: r.data.token }; }
+    try {
+      const r = await api('/api/auth/login', { method: 'POST', body: c, token: '' });
+      if (r.data && r.data.ok && r.data.token) {
+        ADMIN = r.data.token;
+        TOKEN = r.data.token;
+        return { role: 'admin', token: r.data.token };
+      }
+    } catch {
+      return null;
+    }
   }
   return null;
 }
@@ -562,10 +571,14 @@ async function checkApi() {
   const lgT = await api('/api/diag/logs?host=127.0.0.1&limit=5');
   ok('按主机过滤日志不炸', lgT.status === 200, `${lgT.data?.total} 条`);
 
-  const exp = await api(`/api/diag/export?runId=${encodeURIComponent(rid || '')}`);
-  ok('GET /diag/export 返回 CSV', exp.status === 200 && typeof exp.data === 'string', `${String(exp.data).length} 字节`);
-  ok('CSV 带 BOM（Excel 不乱码）', String(exp.data).charCodeAt(0) === 0xFEFF);
-  ok('CSV 含表头', /^﻿等级,分类,目标/.test(String(exp.data)) || /等级,分类,目标/.test(String(exp.data)));
+  const expRes = await fetch(`${BASE}/api/diag/export?runId=${encodeURIComponent(rid || '')}`, {
+    headers: { Authorization: `Bearer ${TOKEN}` }
+  });
+  const expBuf = Buffer.from(await expRes.arrayBuffer());
+  const expText = expBuf.toString('utf8');
+  ok('GET /diag/export 返回 CSV', expRes.status === 200 && expBuf.length > 3, `${expBuf.length} 字节`);
+  ok('CSV 带 BOM（Excel 不乱码）', expBuf[0] === 0xEF && expBuf[1] === 0xBB && expBuf[2] === 0xBF);
+  ok('CSV 含表头', /等级,分类,目标/.test(expText));
 
   const expBad = await api('/api/diag/export');
   ok('export 缺 runId 要 400', expBad.status === 400, `HTTP ${expBad.status}`);
@@ -585,7 +598,7 @@ async function checkApi() {
   if (ADMIN) {
     const r = await fetch(`${BASE}/api/auth/login`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: 'audit', password: 'audit123' })
+      body: JSON.stringify({ username: 'audit', password: 'audit@123' })
     }).then(x => x.json()).catch(() => null);
     if (r && r.ok && r.token) {
       TOKEN = r.token;

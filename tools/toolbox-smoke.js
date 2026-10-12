@@ -17,6 +17,7 @@
 const http = require('http');
 const tb = require('../server/toolbox');
 const tbs = require('../server/toolbox-scan');
+const snmpTools = require('../server/snmp-tools');
 
 const BASE = (process.argv[2] || 'http://127.0.0.1:8787').replace(/\/+$/, '');
 
@@ -69,6 +70,12 @@ function startRedirectServer() {
   ok('isPrivateIp 私有', tb.isPrivateIp('10.0.0.1') === true && tb.isPrivateIp('192.168.1.1') === true);
   ok('isPrivateIp 公网', tb.isPrivateIp('8.8.8.8') === false);
   ok('humanBps 换算', /Mbps|bps|Kbps/.test(tb.humanBps(1048576)) && tb.humanBps(1048576) !== '0 bps');
+  ok('SNMP 主机与 OID 校验', snmpTools.validHost('sw-core-01.example.local') === 'sw-core-01.example.local' &&
+    snmpTools.validHost('bad host;$') === '' && snmpTools.normalizeOid('.1.3.6.1.2.1.1.5.0') === '1.3.6.1.2.1.1.5.0');
+  const sgBad = await snmpTools.get({ host: 'bad host;$', version: '2c', community: 'public', oid: '1.3.6.1.2.1.1.5.0' });
+  ok('SNMP GET 拒绝非法目标', sgBad.ok === false && /合法/.test(sgBad.error || ''), sgBad.error);
+  const swBad = await snmpTools.walk({ host: '127.0.0.1', version: '2c', community: '', oid: 'bad-oid' });
+  ok('SNMP WALK 拒绝非法 OID', swBad.ok === false && /OID/.test(swBad.error || ''), swBad.error);
 
   /* ---------- 本地重定向服务器：redirect + httpCheck ---------- */
   const { srv, port } = await startRedirectServer();
@@ -163,6 +170,14 @@ function startRedirectServer() {
   ok('expandTargets 逗号组合 → 2 主机', Array.isArray(e3) && e3.length === 2, `len=${Array.isArray(e3) ? e3.length : 'NA'}`);
   const e4 = tbs.expandTargets('192.168.1.0/24');
   ok('expandTargets /24 → 254 主机', Array.isArray(e4) && e4.length === 254, `len=${Array.isArray(e4) ? e4.length : 'NA'}`);
+  let tooLarge = '';
+  try { tbs.expandTargets('10.0.0.0/8'); } catch (e) { tooLarge = e.message; }
+  ok('expandTargets 拒绝超大网段', /上限 4096/.test(tooLarge), tooLarge);
+  let invalidIp = '';
+  try { tbs.expandTargets('999.1.1.1'); } catch (e) { invalidIp = e.message; }
+  ok('expandTargets 拒绝非法 IPv4', /无法解析目标/.test(invalidIp), invalidIp);
+  const autoTargets = tbs.expandTargets('auto');
+  ok('expandTargets auto 最多扫描 /24', autoTargets.length <= 254, `len=${autoTargets.length}`);
   const pp = tbs.parsePorts('80,443,1000-1002');
   ok('parsePorts 解析', Array.isArray(pp) && pp.length === 5 && pp.includes(1000) && pp.includes(1002),
     `len=${Array.isArray(pp) ? pp.length : 'NA'}`);
@@ -274,6 +289,8 @@ function startRedirectServer() {
         ['/api/toolbox/topology',   'scan', { target: '127.0.0.1' }],
         ['/api/toolbox/session',    'scan', { host: '127.0.0.1', port: 135, count: 2, timeout: 400 }],
         ['/api/toolbox/camera',     'scan', { target: '127.0.0.1', timeout: 400 }],
+        ['/api/toolbox/snmp-get',   'scan', { host: 'bad host;$', version: '2c', community: 'public', oid: '1.3.6.1.2.1.1.5.0' }],
+        ['/api/toolbox/snmp-walk',  'scan', { host: '127.0.0.1', version: '2c', community: 'public', oid: 'bad-oid' }],
       ];
       for (const [p, perm, body] of newRoutes) {
         try {

@@ -112,7 +112,7 @@
                   <td class="mono fs11 muted">{{ fmt.time(f.startedAt) }}</td>
                   <td class="row gap6">
                     <button class="btn sm" @click="go('/flow?tab=sessions')" title="到会话回溯查看">回溯</button>
-                    <button class="btn sm" :href="'/api/capture/' + f.id + '/download'">下载</button>
+                    <a class="btn sm" :href="'/api/capture/' + f.id + '/download'">下载</a>
                   </td>
                 </tr>
                 <tr v-if="!files.length"><td colspan="7" class="tbl-empty">暂无抓包文件</td></tr>
@@ -159,7 +159,7 @@
           </div>
 
           <label class="checkbox"><input type="checkbox" v-model="form.enabled"> 启用（服务启动时自动周期执行）</label>
-          <div class="hint-line"><span v-html="ic('info',13)"></span><span>旁路抓包依赖本机 tshark/dumpcap；设备侧采集依赖已配置的 SSH 凭据。引擎每 5 秒巡检一次到点任务，并按保留时长自动清理。</span></div>
+          <div class="hint-line"><span v-html="ic('info',13)"></span><span>本地抓包由平台自动选择 TShark + Npcap 或 Windows PktMon，无需单独安装；设备侧采集依赖已配置的 SSH 凭据。引擎每 5 秒巡检一次到点任务，并按保留时长自动清理。</span></div>
         </div>
         <template #foot>
           <button class="btn" @click="form=null">取消</button>

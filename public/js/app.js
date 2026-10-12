@@ -22,14 +22,14 @@
               <div class="sub" style="font-size:10.5px;letter-spacing:2px">Network Operations Platform</div>
             </div>
           </div>
-          <h1>网络分析与监控<br>运维控制台</h1>
+          <h1>网络运维与故障排除<br>工具平台</h1>
           <div class="sub">Network Analysis & Monitoring</div>
           <div class="login-feats">
-            <div><i></i> 大屏可视化 · 设备与端口实时态势</div>
+            <div><i></i> 告警闭环 · 发现、确认、处置与审计留痕</div>
+            <div><i></i> 设备资产 · 设备、端口、拓扑与运行状态</div>
             <div><i></i> Web 终端 · 配置下发与全程会话录像</div>
             <div><i></i> 会话定位 · IP/MAC 一键查到交换机端口</div>
             <div><i></i> 内网测速 · 带宽 / 延迟 / 丢包 / 抖动</div>
-            <div><i></i> 告警联动 · Zabbix 数据源 + 多渠道推送</div>
           </div>
         </div>
         <div class="login-form">
@@ -75,7 +75,7 @@
           S.user = r.user;
           if (form.remember) localStorage.setItem('netops.lastUser', form.username);
           toast(`欢迎回来，${r.user.displayName}`, 'ok', '登录成功');
-          if (!location.hash) go('/screen');
+          if (!location.hash) go('/alarms');
         } catch (e) {
           toast(e.message || '登录失败', 'err');
         } finally { loading.value = false; }
@@ -171,17 +171,26 @@
 
   /* ------------------------------ 应用外壳 ------------------------------ */
   const NAV = [
-    { group: '排障', items: [{ p: '/troubleshoot', t: '排障工作台', i: 'search' }, { p: '/deep-tools', t: '深度排障工具', i: 'toolbox' }] },
     {
-      group: '设备运维', items: [
-        { p: '/devices', t: '设备管理', i: 'server' },
-        { p: '/terminal', t: '终端与配置下发', i: 'terminal' },
-        { p: '/traffic', t: '会话与流量', i: 'activity' },
-        { p: '/speed', t: '内网测速', i: 'zap' }
+      group: '诊断与检测', items: [
+        { p: '/toolbox', t: '网络运维工具箱', i: 'toolbox' },
+        { p: '/diag', t: '专项诊断', i: 'shield' },
+        { p: '/scan', t: '网络扫描', i: 'search' },
+        { p: '/deep-tools', t: '深度排障', i: 'activity' },
+        { p: '/wifi', t: '无线勘测', i: 'wifi' },
+        { p: '/speed', t: '链路测速', i: 'zap' }
       ]
     },
     {
-      group: '流量分析', items: [
+      group: '设备操作', items: [
+        { p: '/devices', t: '设备资产', i: 'server' },
+        { p: '/terminal', t: '终端与配置下发', i: 'terminal' },
+        { p: '/topology', t: '网络拓扑', i: 'share' }
+      ]
+    },
+    {
+      group: '流量可观测', items: [
+        { p: '/traffic', t: '会话与流量', i: 'activity' },
         { p: '/flow', t: '全流量回溯', i: 'history' },
         { p: '/flow-metrics', t: '性能与协议报表', i: 'chart' },
         { p: '/flow-graph', t: '通信关系时序图', i: 'share' },
@@ -190,16 +199,12 @@
       ]
     },
     {
-      group: '安全扫描', items: [
-        { p: '/scan', t: '网络扫描', i: 'search' },
-        { p: '/diag', t: '诊断工具箱', i: 'shield' },
-        { p: '/toolbox', t: '网络运维工具箱', i: 'toolbox' },
-        { p: '/wifi', t: '无线勘测', i: 'wifi' }
+      group: '告警处置', items: [
+        { p: '/alarms', t: '告警中心', i: 'bell', badge: true },
+        { p: '/troubleshoot', t: '排障工作台', i: 'search' }
       ]
     },
-    { group: '监控告警', items: [{ p: '/alarms', t: '告警管理', i: 'bell', badge: true }, { p: '/topology', t: '网络拓扑', i: 'share' }] },
-    { group: '大屏展示', items: [{ p: '/screen', t: '大屏可视化', i: 'monitor' }] },
-    { group: '系统', items: [{ p: '/system', t: '系统管理', i: 'settings' }] }
+    { group: '平台管理', items: [{ p: '/system', t: '系统管理', i: 'settings' }] }
   ];
 
   const Shell = {
@@ -230,12 +235,12 @@
             <span>{{ S.datasourceMode === 'zabbix' ? 'Zabbix 数据源' : '演示模式' }}</span>
             <span :class="S.datasourceMode==='zabbix' ? 'c-green' : 'c-amber'">●</span>
           </div>
-          <div style="margin-top:2px">v1.0.0 · {{ S.user.roleName }}</div>
+          <div style="margin-top:2px">v1.1.0 · {{ S.user.roleName }}</div>
         </div>
       </aside>
 
       <div class="main">
-        <header class="topbar" v-if="!isScreen">
+        <header class="topbar">
           <button class="icon-btn" @click="toggleSb" v-html="ic('menu',17)"></button>
           <div class="crumb">
             {{ crumbTitle }}
@@ -264,7 +269,7 @@
           </div>
         </header>
 
-        <div class="grow" :style="isScreen ? '' : 'overflow:auto;background:var(--bg)'">
+        <div class="grow" style="overflow:auto;background:var(--bg)">
           <component v-if="comp" :is="comp" v-bind="compProps" :key="routeKey" />
           <div v-else class="empty" style="padding-top:120px">
             <div v-html="ic('alert',42)"></div>
@@ -273,7 +278,7 @@
         </div>
       </div>
 
-      <button class="fab" v-if="!isScreen" @click="aiOpen=!aiOpen" :title="'AI 运维助手'" v-html="ic('robot',25)"></button>
+      <button class="fab" @click="aiOpen=!aiOpen" :title="'AI 运维助手'" v-html="ic('robot',25)"></button>
       <AIAssistant :open="aiOpen" @close="aiOpen=false" />
 
       <NcModal v-if="pwdOpen" title="修改密码" :loading="pwdLoading" ok-text="保存" @close="pwdOpen=false" @ok="savePwd">
@@ -294,13 +299,30 @@
       const pwd = reactive({ oldPassword: '', newPassword: '' });
       const routeKey = ref(0);
       const crumb = (p) => {
-        const m = { '/screen': ['大屏可视化', '全网设备态势总览'], '/devices': ['设备管理', '纳管设备清单与运行状态'], '/terminal': ['终端与配置下发', 'Web CLI、命令模板、批量下发、会话录像'], '/traffic': ['会话与流量', 'IP/MAC 定位、地址表、会话分析、抓包'], '/flow': ['全流量回溯', '旁路采集的会话库：协议构成、会话检索与载荷特征'], '/capture': ['旁路采集任务', '旁路抓包 / 设备侧采集的滚动轮转任务'], '/scan': ['网络扫描', '本机存活发现、端口扫描、服务识别与风险判定'], '/speed': ['内网测速', '带宽吞吐 / 延迟丢包 / 链路质量'], '/alarms': ['告警管理', '实时告警与处置记录'], '/topology': ['网络拓扑', '设备层级与链路关系'], '/system': ['系统管理', '数据源、凭据库、用户权限、日志'] };
+        const m = {
+          '/alarms': ['告警中心', '待处理问题、级别状态与处置闭环'],
+          '/devices': ['设备资产', '纳管设备、端口与运行状态'],
+          '/device': ['设备详情', '设备状态、接口指标与资产信息'],
+          '/topology': ['网络拓扑', '设备层级与链路关系'],
+          '/troubleshoot': ['排障工作台', '从告警出发完成诊断与处置'],
+          '/deep-tools': ['深度排障', '端口错误、路径质量与报文分析'],
+          '/terminal': ['终端与配置下发', 'Web CLI、命令模板、批量下发、会话录像'],
+          '/traffic': ['会话与流量', 'IP/MAC 定位、地址表、会话分析、抓包'],
+          '/flow': ['全流量回溯', '协议构成、会话检索与载荷特征'],
+          '/flow-metrics': ['性能与协议报表', '协议指标、性能趋势与异常分布'],
+          '/flow-graph': ['通信关系时序图', '通信节点、链路与时序关系'],
+          '/capture': ['旁路采集任务', '旁路抓包与设备侧采集任务'],
+          '/custom-protocols': ['自定义协议', '维护协议识别规则与特征'],
+          '/scan': ['网络扫描', '存活发现、端口识别与风险判定'],
+          '/diag': ['诊断工具箱', '冲突、环路、日志、测速与 DHCP 检测'],
+          '/toolbox': ['网络运维工具箱', '连通性、DNS、证书、路径与子网工具'],
+          '/wifi': ['无线勘测', '无线网络扫描、采样与定位'],
+          '/speed': ['内网测速', '带宽吞吐、延迟、丢包与链路质量'],
+          '/system': ['系统管理', '数据源、凭据、用户权限与审计日志']
+        };
         const k = p.split('/').slice(0, 2).join('/');
-        m['/diag'] = ['网络诊断工具箱', '摄像头扫描 / IP 冲突 / 环路 / 日志审计 / 外网测速 / DHCP 检测'];
-        m['/toolbox'] = ['网络运维工具箱', '重定向链追踪 / HTTP 可用性 / SSL 证书 / Whois / DNS / Ping / MTR / 指纹 / 子网 / WoL'];
-        return m[k] || ['网络运维控制台', ''];
+        return m[k] || ['网络运维工具平台', ''];
       };
-      const isScreen = computed(() => currentRoute.value.path === '/screen');
       const comp = computed(() => currentRoute.value.def && currentRoute.value.def.comp ? currentRoute.value.def.comp : null);
       const compProps = computed(() => {
         const c = currentRoute.value;
@@ -351,7 +373,7 @@
       onMounted(boot);
       watch(() => S.user, v => { if (v && !timer) timer = setInterval(pollStatus, 30000); });
       return {
-        S, NAV, currentRoute, comp, compProps, routeKey, crumbTitle, crumbSub, isActive, isScreen,
+        S, NAV, currentRoute, comp, compProps, routeKey, crumbTitle, crumbSub, isActive,
         menuOpen, aiOpen, kw, doSearch, openAlarms, logout, toggleSb, refreshAll, ic, go,
         pwdOpen, pwd, pwdLoading, savePwd
       };

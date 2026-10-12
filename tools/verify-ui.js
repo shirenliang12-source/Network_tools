@@ -26,12 +26,12 @@ const srv = process.env.SKIP_SRV === '1'
   ? { kill() { } }
   : process.env.USE_EXE === '1'
     ? spawn(path.join(__dirname, '..', 'dist', 'netops-console.exe'), [], {
-      env: Object.assign({}, process.env, { PORT: new URL(URL_).port || '8787' }),
+      env: Object.assign({}, process.env, { PORT: new URL(URL_).port || '8787', AUTO_INSTALL_TOOLS: '0', NO_ELEVATE: '1' }),
       stdio: ['ignore', 'ignore', 'ignore'], windowsHide: true,
     })
     : spawn(process.execPath, ['server/index.js'], {
       cwd: path.join(__dirname, '..'),
-      env: Object.assign({}, process.env, { PORT: process.env.PORT || '8787' }),
+      env: Object.assign({}, process.env, { PORT: process.env.PORT || '8787', AUTO_INSTALL_TOOLS: '0' }),
       stdio: ['ignore', 'ignore', 'ignore'],
     });
 const fail = (msg, code = 1) => { console.log('!! ' + msg); try { srv.kill(); } catch { } process.exit(code); };
@@ -159,7 +159,7 @@ const fail = (msg, code = 1) => { console.log('!! ' + msg); try { srv.kill(); } 
   console.log(show(s2.value));
 
   /* ---------- 5. 逐页点一遍 ---------- */
-  const routes = ['/screen', '/devices', '/terminal', '/traffic', '/flow', '/flow-metrics', '/flow-graph', '/capture', '/custom-protocols', '/scan', '/diag', '/toolbox', '/wifi', '/speed', '/alarms', '/troubleshoot', '/deep-tools', '/topology', '/system'];
+  const routes = ['/alarms', '/devices', '/terminal', '/traffic', '/flow', '/flow-metrics', '/flow-graph', '/capture', '/custom-protocols', '/scan', '/diag', '/toolbox', '/wifi', '/speed', '/troubleshoot', '/deep-tools', '/topology', '/system', '/system?tab=health'];
   const bad = [];
   for (const r of routes) {
     at = r;
@@ -182,6 +182,54 @@ const fail = (msg, code = 1) => { console.log('!! ' + msg); try { srv.kill(); } 
     console.log(`  ${tag} ${r.padEnd(10)} ${String(waited).padStart(5)}ms len=${String(o.len).padStart(6)}  ${o.main.replace(/\n/g, ' / ')}`);
   }
 
+  /* 命名插槽回归：快速扫描过去曾出现“只有标题和按钮、正文空白”。 */
+  await ev(`NC.go('/scan')`); await new Promise(t => setTimeout(t, 1200));
+  await ev(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.innerText.includes('快速扫描'));if(b)b.click();return !!b})()`);
+  await new Promise(t => setTimeout(t, 500));
+  const quickModal = await ev(`JSON.stringify({
+    shown: !!document.querySelector('.modal'),
+    text: (document.querySelector('.modal-body')||{}).innerText || '',
+    fields: document.querySelectorAll('.modal-body input,.modal-body select').length
+  })`);
+  const quickInfo = JSON.parse(quickModal.value);
+  const quickOk = quickInfo.shown && quickInfo.fields >= 5 && quickInfo.text.includes('自定义参数');
+  if (!quickOk) bad.push('/scan#quick');
+  console.log(`  ${quickOk ? 'OK ' : '空!'} /scan#quick  fields=${quickInfo.fields}  ${quickInfo.text.replace(/\n/g, ' / ').slice(0,100)}`);
+
+  /* 设备资产回归：来源必须明确、编辑抽屉必须可用、隐藏页签图表显示后必须铺满。 */
+  await ev(`NC.go('/devices')`); await new Promise(t => setTimeout(t, 1400));
+  await ev(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.innerText.includes('编辑'));if(b)b.click();return !!b})()`);
+  await new Promise(t => setTimeout(t, 400));
+  const assetDrawer = JSON.parse((await ev(`JSON.stringify({
+    source: (document.querySelector('.main')||{}).innerText?.includes('当前数据来源：演示数据') || false,
+    shown: !!document.querySelector('.drawer'), fields: document.querySelectorAll('.drawer input,.drawer select,.drawer textarea').length,
+    text: (document.querySelector('.drawer')||{}).innerText || ''
+  })`)).value);
+  const assetOk = assetDrawer.source && assetDrawer.shown && assetDrawer.fields >= 10 && assetDrawer.text.includes('恢复跟随数据源');
+  if (!assetOk) bad.push('/devices#edit');
+  console.log(`  ${assetOk ? 'OK ' : '空!'} /devices#edit fields=${assetDrawer.fields} source=${assetDrawer.source}`);
+
+  await ev(`NC.go('/device/SW-ACC-03')`); await new Promise(t => setTimeout(t, 1500));
+  await ev(`(()=>{const t=[...document.querySelectorAll('.tab')].find(x=>x.innerText.includes('流量趋势'));if(t)t.click();return !!t})()`);
+  await new Promise(t => setTimeout(t, 1800));
+  const chartInfo = JSON.parse((await ev(`JSON.stringify({widths:[...document.querySelectorAll('.card-body canvas')].map(x=>Math.round(x.getBoundingClientRect().width)), body:Math.round((document.querySelector('.main')||{}).getBoundingClientRect?.().width||0)})`)).value);
+  const chartOk = chartInfo.widths.length >= 2 && chartInfo.widths.every(w => w > 600);
+  if (!chartOk) bad.push('/device#traffic');
+  console.log(`  ${chartOk ? 'OK ' : '窄!'} /device#traffic canvas=${chartInfo.widths.join(',')} main=${chartInfo.body}`);
+
+  /* Zabbix 组同步回归：切换模式但不保存，确认组筛选与手动同步控件完整渲染。 */
+  await ev(`NC.go('/system?tab=ds')`); await new Promise(t => setTimeout(t, 1200));
+  await ev(`(()=>{const x=document.querySelector('input[type=radio][value=zabbix]');if(!x)return false;x.click();return true})()`);
+  await new Promise(t => setTimeout(t, 300));
+  const groupSync = JSON.parse((await ev(`JSON.stringify({
+    text:(document.querySelector('.main')||{}).innerText||'',
+    checks:document.querySelectorAll('input[type=checkbox]').length,
+    mode:document.querySelector('input[type=radio][value=zabbix]')?.checked||false
+  })`)).value);
+  const groupSyncOk = groupSync.mode && groupSync.text.includes('Zabbix 主机组同步范围') && groupSync.text.includes('读取主机组') && groupSync.text.includes('立即同步');
+  if (!groupSyncOk) bad.push('/system#zabbix-groups');
+  console.log(`  ${groupSyncOk ? 'OK ' : '空!'} /system#zabbix-groups mode=${groupSync.mode}`);
+
   /* ---------- 6. 出图取证 ---------- */
   if (process.env.SHOTS === '1') {
     const dir = path.join(__dirname, '..', 'dist', 'ui-shot');
@@ -192,10 +240,43 @@ const fail = (msg, code = 1) => { console.log('!! ' + msg); try { srv.kill(); } 
       fs.writeFileSync(path.join(dir, name + '.png'), Buffer.from(m0.result.data, 'base64'));
       console.log('  截图 ' + name + '.png');
     };
-    for (const r of ['/screen', '/devices', '/flow', '/topology', '/system', '/toolbox', '/diag', 'login']) {
-      if (r !== 'login') { await ev(`NC.go('${r}')`); await new Promise(t => setTimeout(t, 2000)); }
-      else await ev('NC.go(\'/screen\'); NC.state.user=null');
-      await shot(r.replace(/\//g, '_'));
+    for (const r of ['/alarms', '/devices', '/devices#edit', '/device/SW-ACC-03#traffic', '/flow', '/topology', '/system', '/system#zabbix-groups', '/system?tab=health', '/toolbox', '/diag', '/scan#quick', 'login']) {
+      if (r === '/devices#edit') {
+        await ev(`NC.go('/devices')`); await new Promise(t => setTimeout(t, 1200));
+        await ev(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.innerText.includes('编辑'));if(b)b.click()})()`);
+        await new Promise(t => setTimeout(t, 400));
+      } else if (r === '/device/SW-ACC-03#traffic') {
+        await ev(`NC.go('/device/SW-ACC-03')`); await new Promise(t => setTimeout(t, 1500));
+        await ev(`(()=>{const t=[...document.querySelectorAll('.tab')].find(x=>x.innerText.includes('流量趋势'));if(t)t.click()})()`);
+        await new Promise(t => setTimeout(t, 1800));
+      } else if (r === '/scan#quick') {
+        await ev(`NC.go('/scan')`); await new Promise(t => setTimeout(t, 1200));
+        await ev(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.innerText.includes('快速扫描'));if(b)b.click()})()`);
+        await new Promise(t => setTimeout(t, 500));
+        await ev(`(()=>{const x=[...document.querySelectorAll('.modal-body .result-box')].find(x=>x.innerText.includes('自定义参数'));if(x)x.click()})()`);
+        await new Promise(t => setTimeout(t, 300));
+      } else if (r === '/system#zabbix-groups') {
+        await ev(`NC.go('/system?tab=ds')`); await new Promise(t => setTimeout(t, 1200));
+        await ev(`(()=>{const x=document.querySelector('input[type=radio][value=zabbix]');if(x)x.click()})()`);
+        await new Promise(t => setTimeout(t, 300));
+      } else if (r !== 'login') { await ev(`NC.go('${r}')`); await new Promise(t => setTimeout(t, 2000)); }
+      else await ev('NC.go(\'/alarms\'); NC.state.user=null');
+      const shotName = r === '/system?tab=health' ? '_system-runtime'
+        : r === '/scan#quick' ? '_scan-quick'
+          : r === '/system#zabbix-groups' ? '_system-zabbix-groups'
+          : r === '/devices#edit' ? '_devices-edit'
+            : r === '/device/SW-ACC-03#traffic' ? '_device-traffic'
+              : r.replace(/\//g, '_');
+      await shot(shotName);
+      if (r === '/scan#quick') {
+        await ev(`(()=>{const is=[...document.querySelectorAll('.modal-body input')],ss=[...document.querySelectorAll('.modal-body select')];if(!is[0])return false;const set=(x,v)=>{x.value=v;x.dispatchEvent(new Event('input',{bubbles:true}));};set(is[0],'127.0.0.1');if(is[1])set(is[1],'8787');if(ss[1]){ss[1].value='icmp';ss[1].dispatchEvent(new Event('change',{bubbles:true}));}const b=[...document.querySelectorAll('.modal-foot button')].find(x=>x.innerText.includes('开始扫描'));if(b)b.click();return !!b})()`);
+        for (let i = 0; i < 20; i++) {
+          await new Promise(t => setTimeout(t, 500));
+          const done = await ev(`(document.querySelector('.modal-body')||{}).innerText?.includes('扫描完成')||false`);
+          if (done.value === true) break;
+        }
+        await shot('_scan-result');
+      }
     }
     console.log('截图目录: ' + dir);
   }

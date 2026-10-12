@@ -313,17 +313,27 @@ async function pool(items, size, worker) {
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 /** 存活发现 */
-async function discover(targets, { mode = 'tcp', ports = DISCOVER_PORTS, concurrency = DEFAULT_CONCURRENCY, timeoutMs = DEFAULT_TIMEOUT, onProgress } = {}) {
+async function discover(targets, { mode = 'tcp', ports = DISCOVER_PORTS, concurrency = DEFAULT_CONCURRENCY, timeoutMs = DEFAULT_TIMEOUT, retries = 0, onProgress } = {}) {
   const alive = [];
   let done = 0;
 
+  const attempts = Math.max(1, Math.min(4, Number(retries || 0) + 1));
+  const retry = async (fn, hit) => {
+    let value = null;
+    for (let i = 0; i < attempts; i++) {
+      value = await fn();
+      if (hit(value)) break;
+    }
+    return value;
+  };
+
   const probeTcp = (ip) => pool(ports, Math.min(16, ports.length), async (p) => {
-    const r = await tcpProbe(ip, p, timeoutMs);
+    const r = await retry(() => tcpProbe(ip, p, timeoutMs), x => x && x.ok);
     return r.ok ? p : null;
   });
 
   const pingOne = async (ip) => {
-    const rtt = await netutil.pingOnce(ip, timeoutMs);
+    const rtt = await retry(() => netutil.pingOnce(ip, timeoutMs), x => x !== null);
     return rtt === null ? null : rtt;
   };
 
@@ -344,7 +354,11 @@ async function discover(targets, { mode = 'tcp', ports = DISCOVER_PORTS, concurr
     } else {
       // auto：优先 nmap -sn，环境没有就退回 tcp
       const r = await nmapDiscover(ip);
-      if (r) hit = ip;
+      if (r === true) hit = ip;
+      else if (r === null) {
+        const open = (await probeTcp(ip)).filter(Boolean);
+        if (open.length) hit = ip;
+      }
     }
 
     done++;
@@ -359,25 +373,32 @@ async function discover(targets, { mode = 'tcp', ports = DISCOVER_PORTS, concurr
 function nmapDiscover(ip) {
   return new Promise(resolve => {
     try {
-      const p = spawn('nmap', ['-sn', '-T4', '--host-timeout', '2s', ip], { windowsHide: true, timeout: 6000 });
+      const exe = netutil.findNmap();
+      if (!exe) return resolve(null);
+      const p = spawn(exe, ['-sn', '-T4', '--host-timeout', '2s', ip], { windowsHide: true, timeout: 6000 });
       let out = '';
       p.stdout.on('data', d => { out += d.toString(); });
       p.stderr.on('data', d => { out += d.toString(); });
-      p.on('error', () => resolve(false));
-      p.on('close', () => resolve(/Host is up/.test(out)));
-    } catch { resolve(false); }
+      p.on('error', () => resolve(null));
+      p.on('close', code => resolve(code === 0 ? /Host is up/.test(out) : null));
+    } catch { resolve(null); }
   });
 }
 
 /** 端口扫描：对已存活主机逐个探端口，开放的可选抓 banner */
-async function scanPorts(aliveHosts, ports, { concurrency = DEFAULT_CONCURRENCY, timeoutMs = DEFAULT_TIMEOUT, banner = true, onProgress } = {}) {
+async function scanPorts(aliveHosts, ports, { concurrency = DEFAULT_CONCURRENCY, timeoutMs = DEFAULT_TIMEOUT, banner = true, retries = 0, onProgress } = {}) {
   const open = [];
   let done = 0;
+  const attempts = Math.max(1, Math.min(4, Number(retries || 0) + 1));
   const targets = [];
   for (const h of aliveHosts) for (const p of ports) targets.push({ ip: h.ip, port: p, rttMs: h.rttMs });
 
   await pool(targets, concurrency, async (t) => {
-    const r = await tcpProbe(t.ip, t.port, timeoutMs);
+    let r = null;
+    for (let i = 0; i < attempts; i++) {
+      r = await tcpProbe(t.ip, t.port, timeoutMs);
+      if (r.ok) break;
+    }
     if (!r.ok) return null;
     let bannerStr = '';
     if (banner) bannerStr = await grabBanner(t.ip, t.port, timeoutMs);
@@ -429,14 +450,25 @@ async function runScan(task, user = 'system') {
   const runId = store.uid('scan_');
   const startedAt = new Date(t0).toISOString();
 
+  const advanced = task.data && typeof task.data === 'object' ? task.data : {};
   const mode = task.discoverMode || 'tcp';
   const concurrency = Math.max(1, Math.min(400, Number(task.concurrency || DEFAULT_CONCURRENCY)));
   const timeoutMs = Math.max(200, Math.min(10000, Number(task.timeoutMs || DEFAULT_TIMEOUT)));
+  const retries = Math.max(0, Math.min(3, Number(task.retries ?? advanced.retries ?? 0)));
+  const discoveryPorts = parsePorts(task.discoveryPorts || advanced.discoveryPorts || DISCOVER_PORTS.join(',')).slice(0, 64);
   const withBanner = task.banner !== false;
+  const reverseDns = (task.reverseDns ?? advanced.reverseDns) !== false;
+  const excludeTargets = String(task.excludeTargets || advanced.excludeTargets || '').trim();
+  const note = String(task.note || advanced.note || '').trim().slice(0, 200);
 
   let targets = [];
   try {
     targets = await expandTargets(task.targets);
+    if (excludeTargets) {
+      const excluded = new Set(await expandTargets(excludeTargets));
+      targets = targets.filter(ip => !excluded.has(ip));
+      if (!targets.length) throw new Error('排除目标后没有剩余扫描地址，请检查自定义排除范围');
+    }
   } catch (e) {
     await db.scanRunSave({
       id: runId, taskId: task.id || '', name: task.name || '扫描', targets: task.targets || '',
@@ -449,18 +481,29 @@ async function runScan(task, user = 'system') {
   await db.scanRunSave({
     id: runId, taskId: task.id || '', name: task.name || '扫描', targets: task.targets || '',
     mode, hostsTotal: targets.length, status: 'running', startedAt,
-    data: { ports: parsePorts(task.ports), concurrency, timeoutMs, user }
+    data: { ports: parsePorts(task.ports), discoveryPorts, concurrency, timeoutMs, retries, banner: withBanner, reverseDns, excludeTargets, note, user }
   });
 
-  const alive = await discover(targets, { mode, ports: DISCOVER_PORTS, concurrency, timeoutMs });
+  const alive = await discover(targets, { mode, ports: discoveryPorts.length ? discoveryPorts : DISCOVER_PORTS, concurrency, timeoutMs, retries });
   const portList = parsePorts(task.ports);
   const openPorts = portList.length
-    ? await scanPorts(alive, portList, { concurrency, timeoutMs, banner: withBanner })
+    ? await scanPorts(alive, portList, { concurrency, timeoutMs, banner: withBanner, retries })
     : [];
   const hosts = groupByHost(openPorts);
 
+  /* 存活但没有开放目标端口的主机也必须进入结果，否则会造成“存活数”和主机明细不一致。 */
+  const grouped = new Set(hosts.map(h => h.ip));
+  for (const a of alive) {
+    if (!grouped.has(a.ip)) hosts.push({ ip: a.ip, rttMs: a.rttMs, openPorts: [], riskLevel: 'info', riskTags: [], riskDescs: [] });
+  }
+  for (const h of hosts) {
+    const a = alive.find(x => x.ip === h.ip);
+    if (a) h.rttMs = a.rttMs;
+  }
+  hosts.sort((a, b) => (LEVEL_ORDER[b.riskLevel] - LEVEL_ORDER[a.riskLevel]) || b.openPorts.length - a.openPorts.length || a.ip.localeCompare(b.ip));
+
   /* 主机名反查只在主机数不多时做，避免 DNS 拖慢整轮 */
-  if (hosts.length && hosts.length <= 64) {
+  if (reverseDns && hosts.length && hosts.length <= 64) {
     await pool(hosts, 12, async (h) => {
       h.hostname = await reverseHostname(h.ip);
     });
@@ -504,7 +547,7 @@ async function runScan(task, user = 'system') {
     mode, hostsTotal: targets.length, hostsAlive: alive.length,
     portsOpen: portRows.length, risks: riskCount,
     status: 'done', startedAt, endedAt, durationMs: Date.now() - t0,
-    data: { ports: portList, concurrency, timeoutMs, user, inventory, alarms }
+    data: { ports: portList, discoveryPorts, concurrency, timeoutMs, retries, banner: withBanner, reverseDns, excludeTargets, note, user, inventory, alarms }
   });
 
   await db.scanTaskSave({
@@ -520,11 +563,27 @@ async function runScan(task, user = 'system') {
     detail: `${targets.length} 目标 · 存活 ${alive.length} · 开放端口 ${portRows.length} · 高危主机 ${riskCount} · ${Date.now() - t0}ms`
   });
 
+  const serviceMap = new Map();
+  for (const p of portRows) serviceMap.set(p.service || 'unknown', (serviceMap.get(p.service || 'unknown') || 0) + 1);
+  const services = [...serviceMap.entries()].map(([service, count]) => ({ service, count })).sort((a, b) => b.count - a.count).slice(0, 10);
+  const findings = portRows.filter(p => ['critical', 'high', 'medium'].includes(p.riskLevel))
+    .sort((a, b) => (LEVEL_ORDER[b.riskLevel] || 0) - (LEVEL_ORDER[a.riskLevel] || 0))
+    .slice(0, 12).map(p => ({ ip: p.ip, port: p.port, service: p.service, level: p.riskLevel, desc: p.riskDesc }));
+  const recommendations = [...new Set(findings.map(x => x.desc).filter(Boolean))].slice(0, 6);
+  if (!recommendations.length) recommendations.push('未发现规则库中的明显高危暴露；仍建议结合业务基线确认每个开放端口的必要性。');
+  const rtts = alive.map(x => Number(x.rttMs)).filter(Number.isFinite);
+  const avgRttMs = rtts.length ? Math.round(rtts.reduce((a, b) => a + b, 0) / rtts.length * 10) / 10 : null;
+
   return {
     ok: true, runId, ms: Date.now() - t0,
     total: targets.length, alive: alive.length,
+    offline: Math.max(0, targets.length - alive.length),
+    availabilityRate: targets.length ? Math.round(alive.length / targets.length * 1000) / 10 : 0,
+    avgRttMs,
     openPorts: portRows.length, riskHosts: riskCount,
-    inventory, alarms
+    inventory, alarms, services, findings, recommendations,
+    parameters: { mode, ports: portList, discoveryPorts, concurrency, timeoutMs, retries, banner: withBanner, reverseDns, excludeTargets, note },
+    hostPreview: hosts.slice(0, 20).map(h => ({ ip: h.ip, hostname: h.hostname || '', rttMs: h.rttMs, openPorts: h.openPorts.map(p => p.port), riskLevel: h.riskLevel, riskTags: h.riskTags }))
   };
 }
 
@@ -655,8 +714,8 @@ async function start() {
 
 /* ============================== 快捷扫描 ============================== */
 /** 不建任务、直接扫一次（页面上的「快速扫描」） */
-async function quick(targets, { ports = '22,80,443,3389,445', discoverMode = 'tcp', banner = true, concurrency = DEFAULT_CONCURRENCY, timeoutMs = DEFAULT_TIMEOUT } = {}, user = 'system') {
-  return runScan({ name: '快速扫描', targets, ports, discoverMode, banner, concurrency, timeoutMs }, user);
+async function quick(targets, { ports = '22,80,443,3389,445', discoverMode = 'tcp', banner = true, concurrency = DEFAULT_CONCURRENCY, timeoutMs = DEFAULT_TIMEOUT, retries = 0, discoveryPorts = '', excludeTargets = '', reverseDns = true, note = '' } = {}, user = 'system') {
+  return runScan({ name: '快速扫描', targets, ports, discoverMode, banner, concurrency, timeoutMs, retries, discoveryPorts, excludeTargets, reverseDns, note }, user);
 }
 
 module.exports = {

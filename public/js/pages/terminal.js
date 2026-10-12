@@ -330,7 +330,7 @@
         <template #foot><button class="btn" @click="dep2Open=false">关闭</button></template>
       </NcDrawer>
     </div>`,
-    setup() {
+    setup(props) {
       const devices = ref([]), creds = ref([]), templates = ref([]), tabs = ref([]), deploys = ref([]), recs = ref([]);
       const activeId = ref(''), newHost = ref(''), newCred = ref('');
       const tplOpen = ref(false), tplEdit = ref(null), tplForm = reactive({ name: '', vendor: '通用', category: '查询', description: '', danger: false, text: '' });
@@ -364,6 +364,8 @@
           devices.value = (d.rows || []).map(x => ({ ...x, selected: false }));
           creds.value = c.rows || [];
           templates.value = t.rows || [];
+          const requestedHost = String((props.query && props.query.host) || '');
+          if (requestedHost && devices.value.some(x => x.host === requestedHost)) newHost.value = requestedHost;
           recOn.value = true;
         } catch (e) { toast('加载失败：' + e.message, 'err'); }
       }

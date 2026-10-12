@@ -270,8 +270,18 @@ async function checkApi(srvPort) {
   ok('CSV 表头', lines[0] && lines[0].startsWith('主机IP'), lines[0] || '');
 
   /* 快速扫描 */
-  const qk = await call('POST', '/scan/quick', { targets: '127.0.0.1', ports: taskPorts, banner: false });
+  const qk = await call('POST', '/scan/quick', {
+    targets: '127.0.0.1', ports: taskPorts, banner: false,
+    discoveryPorts: taskPorts, timeoutMs: 900, retries: 1, reverseDns: false, note: '自动化验证'
+  });
   ok('快速扫描', qk.data.ok === true, `存活 ${qk.data.alive} / 端口 ${qk.data.openPorts} / ${qk.data.ms}ms`);
+  ok('快速扫描返回结构化明细', qk.data.availabilityRate === 100
+    && Array.isArray(qk.data.hostPreview) && Array.isArray(qk.data.services)
+    && Array.isArray(qk.data.recommendations),
+  `可用率 ${qk.data.availabilityRate}% · 主机明细 ${(qk.data.hostPreview || []).length} 条`);
+  ok('自定义参数生效', qk.data.parameters?.retries === 1
+    && qk.data.parameters?.reverseDns === false && qk.data.parameters?.note === '自动化验证',
+  JSON.stringify(qk.data.parameters || {}));
 
   /* 权限：审计角色不应有扫描权限 */
   const lg2 = await call('POST', '/auth/login', { username: 'audit', password: 'audit@123' });

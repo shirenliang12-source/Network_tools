@@ -229,19 +229,24 @@ class ZabbixProvider {
     return gs.map(g => ({ id: g.groupid, name: g.name }));
   }
   async hosts(groupId) {
+    const cfg = ((await db.settingsGet()).datasource || {}).zabbix || {};
+    const selectedGroups = groupId ? [String(groupId)] : (Array.isArray(cfg.groupIds) ? cfg.groupIds.map(String).filter(Boolean) : []);
     const params = {
       output: ['hostid', 'host', 'name', 'status', 'available', 'maintenance_status'],
       selectInterfaces: ['interfaceid', 'ip', 'dns', 'port', 'type', 'available', 'error'],
       selectInventory: ['type', 'model', 'vendor', 'serialnum_a', 'location', 'os'],
+      selectHostGroups: ['groupid', 'name'],
       selectTags: 'extend',
       monitored_hosts: true,
       sortfield: 'name'
     };
-    if (groupId) params.groupids = [groupId];
+    if (selectedGroups.length) params.groupids = selectedGroups;
     const hosts = await this.call('host.get', params);
+    if (!hosts.length) return [];
     const items = await this.call('item.get', {
       output: ['itemid', 'hostid', 'key_', 'name', 'lastvalue', 'units', 'value_type'],
       selectHosts: ['hostid'],
+      hostids: hosts.map(h => h.hostid),
       filter: { status: 0 },
       monitored: true,
       webitems: false
@@ -262,6 +267,7 @@ class ZabbixProvider {
       return {
         hostid: h.hostid,
         host: h.host,
+        source: 'zabbix',
         name: h.name || h.host,
         ip: iface.ip || '-',
         status: h.status === '0' ? 1 : 0,       // 1=在线 0=离线
@@ -273,6 +279,7 @@ class ZabbixProvider {
         os: inv.os || '',
         serial: inv.serialnum_a || '',
         location: inv.location || '',
+        groups: (h.hostgroups || []).map(g => ({ id: String(g.groupid), name: g.name })),
         uptimeSec: up ? Number(up.lastvalue) : null,
         cpu: cpu ? Number(cpu.lastvalue) : null,
         mem: mem ? Number(mem.lastvalue) : null,
@@ -378,12 +385,14 @@ class DemoProvider {
         const det = demoDetail(d.host);
         const down = d.host === 'SW-ACC-03';
         return {
-          hostid: d.host, host: d.host, name: d.name, ip: d.ip,
+          hostid: d.host, host: d.host, source: 'demo', name: d.name, ip: d.ip,
           status: down ? 0 : 1, available: down ? 0 : 1, error: down ? 'SNMP 超时 / 主机不可达' : '',
           maintenance: false, vendor: d.vendor, model: d.model, os: d.os,
           serial: det.serial, location: d.zone, role: d.role,
           uptimeSec: det.uptimeSec, cpu: det.cpu, mem: det.mem, temp: det.temp,
-          portCount: d.ports, tags: { zone: d.zone, role: d.role }
+          portCount: d.ports,
+          groups: [{ id: d.role === '防火墙' ? 'g2' : 'g1', name: d.role === '防火墙' ? '网络设备/防火墙' : '网络设备/交换机' }],
+          tags: { zone: d.zone, role: d.role }
         };
       });
   }

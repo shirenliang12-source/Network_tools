@@ -1,8 +1,8 @@
 {
   "name": "netops-console",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
-  "description": "网络分析与监控运维控制台 - Zabbix 数据源 + 大屏可视化 + Web终端/配置下发 + 会话流量分析 + 内网测速",
+  "description": "纯网络运维与故障排除工具平台 - 扫描、诊断、SNMP、终端、抓包与流量分析",
   "main": "server/index.js",
   "bin": "server/index.js",
   "scripts": {
@@ -22,7 +22,11 @@
     "deep": "node tools/deep-tools-smoke.js",
     "wifi": "node tools/wifi-smoke.js",
     "migrate": "node tools/migrate.js",
-    "build": "pkg . --target node18-win-x64 --output dist/netops-console-win.exe && pkg . --target node18-macos-x64 --output dist/netops-console-macos && pkg . --target node18-linux-x64 --output dist/netops-console-linux"
+    "build": "npm run build:binaries",
+    "build:binaries": "npm run build:win && npm run build:linux && npm run build:mac",
+    "build:win": "pkg . --target node18-win-x64 --output dist/bin/netops-console-windows-x64.exe --compress GZip",
+    "build:linux": "pkg . --target node18-linux-x64 --output dist/bin/netops-console-linux-x64 --compress GZip",
+    "build:mac": "pkg . --target node18-macos-x64 --output dist/bin/netops-console-macos-x64 --compress GZip && pkg . --target node18-macos-arm64 --output dist/bin/netops-console-macos-arm64 --compress GZip --no-bytecode --public --public-packages \"*\""
   },
   "pkg": {
     "scripts": [
@@ -46,9 +50,9 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@vue/compiler-dom": "^3.5.43",
     "echarts": "^6.1.0",
     "express": "^5.2.1",
+    "net-snmp": "^3.29.2",
     "nodemailer": "^10.0.10",
     "pg": "^8.23.0",
     "ssh2": "^1.17.0",
@@ -56,6 +60,7 @@
     "ws": "^8.21.3"
   },
   "devDependencies": {
-    "pkg": "^5.8.1"
+    "@vue/compiler-dom": "^3.5.43",
+    "@yao-pkg/pkg": "^5.16.1"
   }
 }

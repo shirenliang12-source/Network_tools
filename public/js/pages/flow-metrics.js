@@ -163,7 +163,7 @@
     setup() {
       const ic = (n, s) => icon(n, s);
       const TABS = [
-        { k: 'perf', n: '性能概览', i: 'dashboard' },
+        { k: 'perf', n: '性能概览', i: 'activity' },
         { k: 'proto', n: '协议报表', i: 'list' },
         { k: 'timeline', n: '流量时序', i: 'activity' }
       ];

@@ -85,7 +85,7 @@
                   <div class="ts-step-n">{{ i+1 }}</div>
                   <div class="col gap2" style="flex:1">
                     <div class="fs13 fw5">{{ s.name }}</div>
-                    <div class="fs12 mono" style="color:var(--d-text-2);white-space:pre-wrap">{{ s.evidence }}</div>
+                    <div class="fs12 mono muted" style="white-space:pre-wrap">{{ s.evidence }}</div>
                     <div class="fs12" style="color:var(--primary)">→ {{ s.finding }}</div>
                   </div>
                 </div>
@@ -111,9 +111,9 @@
         </div>
       </div>
     </div>`,
-    setup() {
+    setup(props) {
       const rows = ref([]), stats = reactive({ disaster: 0, high: 0, average: 0, warning: 0, information: 0 });
-      const f = reactive({ severity: '', host: '', keyword: '' });
+      const f = reactive({ severity: '', host: String((props.query && props.query.host) || ''), keyword: '' });
       const hosts = ref([]), auto = ref(false);
       const sel = ref(null), diag = ref(null), loading = ref(false);
 

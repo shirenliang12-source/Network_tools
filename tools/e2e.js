@@ -37,12 +37,8 @@ async function call(method, path, body, token) {
   const me = await call('GET', '/auth/me', null, token);
   ok('获取当前用户', me.data.user && me.data.user.role === 'admin', me.data.user ? me.data.user.username + '/' + me.data.user.roleName : '');
 
-  /* 2. 总览与设备 */
-  console.log('\n[总览 / 设备]');
-  const ov = await call('GET', '/overview', null, token);
-  ok('总览 overview', !!ov.data.overview || !!ov.data.kpi, Object.keys(ov.data).join(','));
-  const tr = await call('GET', '/overview/trend?range=24h', null, token);
-  ok('趋势 overview/trend', Array.isArray(tr.data.data) || !!tr.data.data, Object.keys(tr.data).join(','));
+  /* 2. 设备 */
+  console.log('\n[设备]');
   const dv = await call('GET', '/devices?page=1&size=20', null, token);
   ok('设备列表', Array.isArray(dv.data.rows) && dv.data.rows.length > 0, `${(dv.data.rows || []).length} 台`);
   const host = (dv.data.rows || [])[0].host;

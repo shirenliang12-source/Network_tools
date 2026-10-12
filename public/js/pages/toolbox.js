@@ -1,5 +1,5 @@
 /* =========================================================================
- * 网络运维工具箱：NetToolbox 移植的 12 个跨平台工具前端页面
+ * 网络运维工具箱：跨平台故障定位与设备查询工具
  * 重定向链追踪 / HTTP 可用性 / SSL 证书 / Whois / 公网出口 / Ping 详版 /
  * MTR / DNS 诊断 / 服务与 OS 指纹 / 网卡流量 / NTP / 子网计算 / 网络唤醒
  * ========================================================================= */
@@ -10,26 +10,30 @@
   const ic = (n, s) => ic0(n, s);
 
   /* ----------------------------- 工具清单 ----------------------------- */
-  const CATS = ['Web / HTTP', '域名 / DNS', '主机探测', '扫描发现', '安全检测', '主机信息', '无线分析', '网络体检', '会话测试', '主机与网络', '网络计算', '电源管理'];
+  const CATS = ['Web / HTTP', '域名 / DNS', '主机探测', '设备管理协议', '扫描发现', '安全检测', '主机信息', '无线分析', '网络体检', '会话测试', '主机与网络', '网络计算', '电源管理'];
   const TOOLS = [
     { key: 'redirect', name: '重定向链追踪', cat: 'Web / HTTP', icon: 'share', api: 'redirect', perm: 'auth',
-      desc: '逐跳追踪 30x 跳转，识别 HTTPS 降级、跨域、跨端口、HSTS 与重定向环路', example: 'http://www.baidu.com' },
+      desc: '逐跳追踪 30x 跳转，识别 HTTPS 降级、跨域、跨端口、HSTS 与重定向环路', example: 'http://www.baidu.com', standard: 'curl' },
     { key: 'httpcheck', name: 'HTTP 可用性', cat: 'Web / HTTP', icon: 'activity', api: 'httpcheck', perm: 'auth',
       desc: '检测站点状态码、耗时、标题、关键字与 TLS 证书剩余天数', example: 'https://www.baidu.com' },
     { key: 'sslcert', name: 'SSL 证书检测', cat: 'Web / HTTP', icon: 'shield', api: 'sslcert', perm: 'auth',
-      desc: '抓取对端 X.509 证书，检查有效期、自签名、链校验与加密套件', example: 'www.baidu.com' },
+      desc: '抓取对端 X.509 证书，检查有效期、自签名、链校验与加密套件', example: 'www.baidu.com', standard: 'OpenSSL' },
     { key: 'whois', name: 'Whois 归属查询', cat: '域名 / DNS', icon: 'search', api: 'whois', perm: 'auth',
       desc: '优先 RDAP、回落 whois 协议，查询域名/IP 的注册与归属信息', example: 'baidu.com' },
     { key: 'publicip', name: '公网出口 IP', cat: '域名 / DNS', icon: 'globe', api: 'publicip', perm: 'auth',
       desc: '查询本机经 NAT 后的公网出口地址与 ASN / 运营商', example: '' },
     { key: 'dns', name: 'DNS 诊断', cat: '域名 / DNS', icon: 'globe', api: 'dns', perm: 'auth',
-      desc: '本机与多家公共 DNS 多类型对比，发现解析不一致与疑似劫持', example: 'baidu.com' },
+      desc: '本机与多家公共 DNS 多类型对比，发现解析不一致与疑似劫持', example: 'baidu.com', standard: 'dig / nslookup' },
     { key: 'ping', name: 'Ping 详版', cat: '主机探测', icon: 'wifi', api: 'ping', perm: 'scan',
       desc: 'ICMP 探测并补充 TTL，给出丢包、抖动与健康评分', example: '8.8.8.8' },
     { key: 'mtr', name: 'MTR 路由追踪', cat: '主机探测', icon: 'share', api: 'mtr', perm: 'scan',
-      desc: '多轮 tracert/traceroute 采样，统计每跳延迟、抖动与丢包', example: '8.8.8.8' },
+      desc: '多轮 tracert/traceroute 采样，统计每跳延迟、抖动与丢包', example: '8.8.8.8', standard: 'MTR / traceroute' },
     { key: 'fingerprint', name: '服务 / OS 指纹', cat: '主机探测', icon: 'cpu', api: 'fingerprint', perm: 'scan',
-      desc: '并发 TCP/Banner/TLS 探测，推断操作系统、设备类型与高危端口', example: '127.0.0.1' },
+      desc: '并发 TCP/Banner/TLS 探测，推断操作系统、设备类型与高危端口', example: '127.0.0.1', standard: 'Nmap' },
+    { key: 'snmpget', name: 'SNMP GET', cat: '设备管理协议', icon: 'server', api: 'snmp-get', perm: 'scan',
+      desc: '读取一个或多个设备 OID，支持 SNMP v1、v2c 与 v3 安全模型', example: '1.3.6.1.2.1.1.5.0', standard: 'Net-SNMP snmpget' },
+    { key: 'snmpwalk', name: 'SNMP WALK', cat: '设备管理协议', icon: 'layers', api: 'snmp-walk', perm: 'scan',
+      desc: '遍历 MIB 子树并限制返回数量，适合接口表、系统信息和设备盘点', example: '1.3.6.1.2.1.2.2', standard: 'Net-SNMP snmpwalk' },
     { key: 'ifstat', name: '网卡实时流量', cat: '主机与网络', icon: 'activity', api: 'ifstat', perm: 'auth',
       desc: '差分网卡计数器，计算各适配器收/发速率与峰值', example: '' },
     { key: 'ntp', name: 'NTP 时间同步', cat: '主机与网络', icon: 'clock', api: 'ntp', perm: 'auth',
@@ -40,7 +44,7 @@
       desc: '构造 Magic Packet 经 UDP 广播，远程唤醒指定 MAC', example: '00:11:22:33:44:55' },
 
     { key: 'portscan', name: '端口扫描', cat: '扫描发现', icon: 'server', api: 'portscan', perm: 'scan',
-      desc: 'TCP 全连接扫描 + Banner/服务/产品识别，定位开放端口', example: '127.0.0.1' },
+      desc: 'TCP 全连接扫描 + Banner/服务/产品识别，定位开放端口', example: '127.0.0.1', standard: 'Nmap' },
     { key: 'discovery', name: '主机发现', cat: '扫描发现', icon: 'search', api: 'discovery', perm: 'scan',
       desc: 'ARP 缓存 + ICMP Ping 扫 + TCP 探测，发现在线主机与 MAC/厂商', example: 'auto' },
     { key: 'topology', name: '拓扑发现', cat: '扫描发现', icon: 'share', api: 'topology', perm: 'scan',
@@ -92,10 +96,15 @@
     ipcTarget: 'auto', ipcTimeout: 600,
     hostIp: '8.8.8.8', hostTimeout: 600,
     vendMac: '00:0c:29:ab:cd:ef',
-    sessHost: '127.0.0.1', sessPort: 80, sessCount: 20, sessTimeout: 2000
+    sessHost: '127.0.0.1', sessPort: 80, sessCount: 20, sessTimeout: 2000,
+    snmpHost: '127.0.0.1', snmpPort: 161, snmpVersion: '2c', snmpCommunity: 'public',
+    snmpUsername: '', snmpLevel: 'authPriv', snmpAuthProtocol: 'sha256', snmpAuthKey: '',
+    snmpPrivProtocol: 'aes', snmpPrivKey: '', snmpContext: '', snmpTimeout: 3000, snmpRetries: 1,
+    snmpOids: '1.3.6.1.2.1.1.1.0,1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0',
+    snmpRootOid: '1.3.6.1.2.1.2.2', snmpLimit: 300, snmpMaxRepetitions: 20
   });
 
-  const current = ref('redirect');
+  const current = ref('ping');
   const result = ref(null);
   const err = ref('');
   const running = ref(false);
@@ -125,6 +134,16 @@
   function num(v, def) { const n = Number(v); return Number.isFinite(n) ? n : def; }
   function select(t) { current.value = t.key; result.value = null; err.value = ''; }
 
+  function snmpBody() {
+    return {
+      host: form.snmpHost, port: num(form.snmpPort, 161), version: form.snmpVersion,
+      community: form.snmpCommunity, username: form.snmpUsername, level: form.snmpLevel,
+      authProtocol: form.snmpAuthProtocol, authKey: form.snmpAuthKey,
+      privProtocol: form.snmpPrivProtocol, privKey: form.snmpPrivKey, context: form.snmpContext,
+      timeout: num(form.snmpTimeout, 3000), retries: num(form.snmpRetries, 1)
+    };
+  }
+
   /* 按工具组装请求体（对齐 server/toolbox.js 的参数命名） */
   function buildBody(k) {
     switch (k) {
@@ -135,6 +154,8 @@
       case 'publicip': return {};
       case 'ping': return { host: form.host, opts: { count: num(form.pingCount, 4), timeoutMs: num(form.pingTimeout, 1500) } };
       case 'mtr': return { host: form.host, opts: { maxHops: num(form.mtrMaxHops, 30), rounds: num(form.mtrRounds, 2), probeTimeoutMs: num(form.mtrProbeTimeout, 1000) } };
+      case 'snmpget': return { ...snmpBody(), oids: form.snmpOids.split(/[,\s]+/).filter(Boolean) };
+      case 'snmpwalk': return { ...snmpBody(), oid: form.snmpRootOid, limit: num(form.snmpLimit, 300), maxRepetitions: num(form.snmpMaxRepetitions, 20) };
       case 'dns': return { domain: form.domain, opts: { types: form.dnsTypes.split(/[,\s]+/).map(s => s.toUpperCase()).filter(Boolean), servers: form.dnsServers.split(/[,\s]+/).filter(Boolean) } };
       case 'fingerprint': return { host: form.host, opts: { full: form.fpFull, ports: form.fpPorts ? form.fpPorts.split(/[,\s]+/).map(Number).filter(n => n > 0) : [], timeoutMs: num(form.fpTimeout, 1200) } };
       case 'ifstat': return { opts: { intervalMs: num(form.ifInterval, 1000) } };
@@ -242,6 +263,9 @@
         <div class="tb-head-d">{{ cur.desc }}</div>
       </div>
       <div class="grow"></div>
+      <span v-if="cur.standard" class="tb-perm" style="background:rgba(8,145,178,.12);color:#087f9a">
+        主流工作流 · {{ cur.standard }}
+      </span>
       <span class="tb-perm" :style="cur.perm==='scan' ? {background:'rgba(217,119,6,.15)',color:'#d97706'} : {background:'rgba(37,99,235,.12)',color:'#2563eb'}">
         {{ cur.perm==='scan' ? '探测类 · 需 scan 权限' : '只读 · 登录即可用' }}
       </span>
@@ -320,6 +344,53 @@
             <input class="inp" type="number" v-model.number="form.mtrRounds"></div>
           <div class="field" style="width:130px"><label>每跳超时(ms)</label>
             <input class="inp" type="number" v-model.number="form.mtrProbeTimeout"></div>
+        </div>
+
+        <!-- ============ SNMP GET / WALK ============ -->
+        <div v-else-if="current==='snmpget' || current==='snmpwalk'" class="col gap12">
+          <div class="row gap12 wrap">
+            <div class="field" style="flex:1;min-width:220px"><label>设备 IP / 主机名</label>
+              <input class="inp" v-model.trim="form.snmpHost" placeholder="192.168.1.1"></div>
+            <div class="field" style="width:100px"><label>UDP 端口</label>
+              <input class="inp" type="number" v-model.number="form.snmpPort"></div>
+            <div class="field" style="width:110px"><label>版本</label>
+              <select class="inp" v-model="form.snmpVersion"><option value="1">v1</option><option value="2c">v2c</option><option value="3">v3</option></select></div>
+            <div class="field" style="width:120px"><label>超时(ms)</label>
+              <input class="inp" type="number" v-model.number="form.snmpTimeout"></div>
+            <div class="field" style="width:90px"><label>重试</label>
+              <input class="inp" type="number" v-model.number="form.snmpRetries"></div>
+          </div>
+          <div v-if="form.snmpVersion!=='3'" class="row gap12 wrap">
+            <div class="field" style="flex:1;min-width:260px"><label>Community（仅本次查询使用，不写日志）</label>
+              <input class="inp" type="password" v-model="form.snmpCommunity" autocomplete="off" placeholder="public"></div>
+          </div>
+          <template v-else>
+            <div class="row gap12 wrap">
+              <div class="field" style="flex:1;min-width:180px"><label>用户名</label><input class="inp" v-model.trim="form.snmpUsername" autocomplete="off"></div>
+              <div class="field" style="width:160px"><label>安全级别</label>
+                <select class="inp" v-model="form.snmpLevel"><option value="noAuthNoPriv">noAuthNoPriv</option><option value="authNoPriv">authNoPriv</option><option value="authPriv">authPriv</option></select></div>
+              <div class="field" style="flex:1;min-width:160px"><label>Context（可选）</label><input class="inp" v-model.trim="form.snmpContext"></div>
+            </div>
+            <div v-if="form.snmpLevel!=='noAuthNoPriv'" class="row gap12 wrap">
+              <div class="field" style="width:140px"><label>认证算法</label>
+                <select class="inp" v-model="form.snmpAuthProtocol"><option>sha256</option><option>sha</option><option>sha224</option><option>sha384</option><option>sha512</option><option>md5</option></select></div>
+              <div class="field" style="flex:1;min-width:210px"><label>认证密码</label><input class="inp" type="password" v-model="form.snmpAuthKey" autocomplete="off"></div>
+              <template v-if="form.snmpLevel==='authPriv'">
+                <div class="field" style="width:140px"><label>加密算法</label>
+                  <select class="inp" v-model="form.snmpPrivProtocol"><option value="aes">AES-128</option><option value="aes256r">AES-256 Reeder</option><option value="aes256b">AES-256 Blumenthal</option><option value="des">DES</option></select></div>
+                <div class="field" style="flex:1;min-width:210px"><label>加密密码</label><input class="inp" type="password" v-model="form.snmpPrivKey" autocomplete="off"></div>
+              </template>
+            </div>
+          </template>
+          <div v-if="current==='snmpget'" class="field"><label>OID（多个用逗号或空格分隔，最多 32 个）</label>
+            <input class="inp mono-num" v-model.trim="form.snmpOids" placeholder="1.3.6.1.2.1.1.5.0"></div>
+          <div v-else class="row gap12 wrap">
+            <div class="field" style="flex:1;min-width:280px"><label>OID 根节点</label>
+              <input class="inp mono-num" v-model.trim="form.snmpRootOid" placeholder="1.3.6.1.2.1.2.2"></div>
+            <div class="field" style="width:120px"><label>最多返回</label><input class="inp" type="number" v-model.number="form.snmpLimit"></div>
+            <div class="field" style="width:150px"><label>Bulk 批量数</label><input class="inp" type="number" v-model.number="form.snmpMaxRepetitions"></div>
+          </div>
+          <div class="muted fs12">推荐生产设备优先使用 SNMPv3 authPriv；本工具只实现只读 GET/WALK，不提供 SET。</div>
         </div>
 
         <!-- ============ 指纹 ============ -->
@@ -673,6 +744,27 @@
                 <td>{{ h.avg==null?'—':h.avg+'ms' }}</td><td>{{ h.min==null?'—':h.min+'ms' }}</td>
                 <td>{{ h.max==null?'—':h.max+'ms' }}</td><td>{{ h.jitter==null?'—':h.jitter+'ms' }}</td>
                 <td :style="{color: levelColor(h.loss>20?'high':(h.loss>0?'medium':'ok'))}">{{ h.loss }}%</td>
+              </tr>
+            </tbody>
+          </table></div>
+        </template>
+
+        <!-- ===== SNMP GET / WALK ===== -->
+        <template v-else-if="current==='snmpget' || current==='snmpwalk'">
+          <div class="row gap8 wrap" style="margin-bottom:8px">
+            <span class="tag" :style="badgeColor('info')">{{ r.host }}:{{ r.port }}</span>
+            <span class="tag" :style="badgeColor('info')">SNMP v{{ r.version }}</span>
+            <span class="tag" :style="badgeColor('ok')">{{ r.count }} 条</span>
+            <span class="tag" :style="badgeColor('info')">{{ r.ms }}ms</span>
+            <span v-if="r.truncated" class="tag" :style="badgeColor('medium')">已达到返回上限</span>
+          </div>
+          <div v-if="r.warning" class="tb-note c-amber mb8">{{ r.warning }}</div>
+          <div class="table-wrap"><table class="ntable compact">
+            <thead><tr><th style="width:310px">OID</th><th style="width:130px">类型</th><th>值</th></tr></thead>
+            <tbody>
+              <tr v-for="(row,i) in r.rows" :key="row.oid+'-'+i">
+                <td class="mono-num">{{ row.oid }}</td><td>{{ row.type }}</td>
+                <td :class="{'c-red':row.error}" style="word-break:break-all;white-space:pre-wrap">{{ row.error || row.value || '—' }}</td>
               </tr>
             </tbody>
           </table></div>

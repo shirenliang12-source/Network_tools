@@ -15,6 +15,7 @@ const path = require('path');
 const os = require('os');
 const store = require('./store');
 const db = require('./db');
+const runtimeTools = require('./runtime-tools');
 
 /* ============================== ICMP ============================== */
 const IS_WIN = process.platform === 'win32';
@@ -181,11 +182,12 @@ function throughputClient(host, port, { seconds = 8, parallel = 1, mode = 'downl
 function findIperf() {
   const cfgPath = (db.settingsSync() || {}).speed?.iperfPath;
   if (cfgPath && fs.existsSync(cfgPath)) return cfgPath;
-  const cands = IS_WIN
-    ? ['iperf3.exe', 'C:\\Program Files\\iperf3\\iperf3.exe', 'C:\\iperf3\\iperf3.exe']
-    : ['/usr/bin/iperf3', '/usr/local/bin/iperf3', 'iperf3'];
-  for (const c of cands) { try { if (c.includes(path.sep) ? fs.existsSync(c) : true) return c; } catch { } }
-  return null;
+  const managed = path.join(runtimeTools.DIR, 'iperf3', IS_WIN ? 'iperf3.exe' : 'iperf3');
+  return runtimeTools.resolveCommand(IS_WIN ? 'iperf3.exe' : 'iperf3', IS_WIN
+    ? [managed,
+      process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet', 'Packages', 'ar51an.iPerf3_Microsoft.Winget.Source_8wekyb3d8bbwe', 'iperf3.exe') : '',
+      'C:\\Program Files\\iperf3\\iperf3.exe', 'C:\\iperf3\\iperf3.exe']
+    : [managed, '/usr/bin/iperf3', '/usr/local/bin/iperf3']);
 }
 function runIperf3(exe, args, timeoutMs = 60000) {
   return new Promise(resolve => {
@@ -335,42 +337,106 @@ const TABLE_CMDS = {
 function findTshark() {
   const cfg = (db.settingsSync() || {}).capture || {};
   if (cfg.tsharkPath && fs.existsSync(cfg.tsharkPath)) return cfg.tsharkPath;
-  const cands = IS_WIN
-    ? ['C:\\Program Files\\Wireshark\\tshark.exe', 'C:\\Program Files (x86)\\Wireshark\\tshark.exe',
-      'C:\\Program Files\\Wireshark\\dumpcap.exe']
-    : ['/usr/bin/tshark', '/usr/local/bin/tshark', '/usr/bin/dumpcap'];
-  for (const c of cands) { try { if (fs.existsSync(c)) return c; } catch { } }
-  return null;
+  const managed = runtimeTools.paths();
+  return runtimeTools.resolveCommand(IS_WIN ? 'tshark.exe' : 'tshark', IS_WIN
+    ? [managed.wireshark, 'C:\\Program Files\\Wireshark\\tshark.exe', 'C:\\Program Files (x86)\\Wireshark\\tshark.exe']
+    : ['/usr/bin/tshark', '/usr/local/bin/tshark']);
 }
 
-/** 本机抓包（需 Npcap / Wireshark），返回 pcap 文件与摘要 */
-function localCapture({ iface, filter, seconds = 15, onProgress }) {
-  const exe = findTshark();
-  if (!exe) { const e = new Error('未检测到 tshark / dumpcap，请安装 Wireshark（含 Npcap）或在系统设置里指定路径'); e.code = 'NO_CAPTURE_ENGINE'; throw e; }
+function findNmap() {
+  const managed = runtimeTools.paths();
+  return runtimeTools.resolveCommand(IS_WIN ? 'nmap.exe' : 'nmap', IS_WIN
+    ? [managed.nmap, 'C:\\Program Files (x86)\\Nmap\\nmap.exe', 'C:\\Program Files\\Nmap\\nmap.exe']
+    : ['/usr/bin/nmap', '/usr/local/bin/nmap']);
+}
+
+function findPktmon() {
+  return IS_WIN ? runtimeTools.resolveCommand('pktmon.exe', ['C:\\Windows\\System32\\PktMon.exe']) : null;
+}
+
+/** 当前可用于实时采集的后端。TShark 在 Windows 上必须有 Npcap，缺少时自动走 PktMon。 */
+function captureEngine() {
+  const tshark = findTshark();
+  if (tshark && (!IS_WIN || runtimeTools.hasNpcap())) return { bin: tshark, tool: 'tshark', parser: tshark };
+  const pktmon = findPktmon();
+  if (pktmon && runtimeTools.isElevated()) return { bin: pktmon, tool: 'pktmon', parser: tshark || '' };
+  if (tshark && !IS_WIN) return { bin: tshark, tool: 'tshark', parser: tshark };
+  return { bin: null, tool: '', parser: tshark || '', reason: pktmon ? 'PktMon 需要管理员权限' : '未检测到抓包后端' };
+}
+
+function runFile(bin, args, timeoutMs = 360000) {
+  return new Promise((resolve, reject) => {
+    execFile(bin, args, { windowsHide: true, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) { err.detail = String(stderr || stdout || err.message).slice(-2000); return reject(err); }
+      resolve(String(stdout || '') + String(stderr || ''));
+    });
+  });
+}
+
+/** 抓到指定文件；Windows 无 Npcap 时用 PktMon 采集并自动转为 pcap。 */
+async function captureToFile({ out, iface = '1', filter = '', seconds = 15, sizeMB = 100, onProgress }) {
+  const eng = captureEngine();
+  if (!eng.bin) { const e = new Error('本机没有可用抓包后端；可改用设备侧抓包'); e.code = 'NO_CAPTURE_ENGINE'; throw e; }
+  const sec = Math.max(1, Math.min(300, Number(seconds) || 15));
+  if (eng.tool === 'tshark') {
+    const args = ['-i', iface || '1', '-w', out, '-a', `duration:${sec}`, '-a', `filesize:${Math.max(1, Number(sizeMB) || 100) * 1024}`];
+    if (filter) args.push('-f', filter);
+    const log = await new Promise((resolve, reject) => {
+      const p = spawn(eng.bin, args, { windowsHide: true });
+      let text = '';
+      const add = d => { text = (text + d.toString()).slice(-4000); if (onProgress) onProgress(d.toString()); };
+      p.stdout.on('data', add); p.stderr.on('data', add);
+      p.once('error', reject);
+      p.once('close', code => code === 0 || fs.existsSync(out) ? resolve(text) : reject(new Error(text || `TShark 退出码 ${code}`)));
+    });
+    const size = fs.existsSync(out) ? fs.statSync(out).size : 0;
+    return { engine: 'tshark', iface, filter, seconds: sec, path: out, file: path.basename(out), size, code: size ? 0 : 1, log };
+  }
+
+  const stem = out.replace(/\.pcap$/i, '');
+  const etl = `${stem}.etl`;
+  const pcapng = `${stem}.pcapng`;
+  let log = '';
+  try {
+    log += await runFile(eng.bin, ['start', '--capture', '--comp', 'nics', '--pkt-size', '0', '--file-name', etl,
+      '--file-size', String(Math.max(1, Number(sizeMB) || 100)), '--log-mode', 'circular'], 30000);
+  } catch (e) {
+    throw new Error('PktMon 启动失败（可能已有其他抓包会话或需要管理员权限）：' + (e.detail || e.message));
+  }
+  await new Promise(r => setTimeout(r, sec * 1000));
+  try { log += await runFile(eng.bin, ['stop'], 30000); }
+  catch (e) { throw new Error('PktMon 停止失败：' + (e.detail || e.message)); }
+  try { log += await runFile(eng.bin, ['etl2pcap', etl, '--out', pcapng], 120000); }
+  catch (e) { throw new Error('PktMon 转换 PCAPNG 失败：' + (e.detail || e.message)); }
+
+  let finalPath = pcapng;
+  if (eng.parser) {
+    const args = ['-r', pcapng, '-F', 'pcap', '-w', out];
+    await runFile(eng.parser, args, 180000);
+    finalPath = out;
+    try { fs.unlinkSync(pcapng); } catch { }
+  }
+  try { fs.unlinkSync(etl); } catch { }
+  if (filter) log += '\nPktMon 后端在网卡层采集全部流量；BPF 条件已保存在任务元数据中，建议回溯时筛选。';
+  const size = fs.existsSync(finalPath) ? fs.statSync(finalPath).size : 0;
+  return { engine: eng.parser ? 'pktmon+tshark' : 'pktmon', iface: iface || 'all-nics', filter, seconds: sec,
+    path: finalPath, file: path.basename(finalPath), size, code: size ? 0 : 1, log: log.slice(-4000) };
+}
+
+/** 本机抓包，返回 pcap/pcapng 文件与摘要。 */
+async function localCapture({ iface, filter, seconds = 15, onProgress }) {
   const id = store.uid('cap_');
   const out = path.join(store.CAP_DIR, `${id}.pcap`);
-  const isDumpcap = /dumpcap/i.test(exe);
-  const args = isDumpcap
-    ? ['-i', iface, '-w', out, '-a', `duration:${seconds}`]
-    : ['-i', iface, '-w', out, '-a', `duration:${seconds}`];
-  if (filter) args.push('-f', filter);
-  const p = spawn(exe, args, { windowsHide: true });
-  let log = '';
-  p.stdout.on('data', d => { log += d.toString(); if (onProgress) onProgress(d.toString()); });
-  p.stderr.on('data', d => { log += d.toString(); if (onProgress) onProgress(d.toString()); });
-  return new Promise((resolve, reject) => {
-    p.on('close', code => {
-      const size = fs.existsSync(out) ? fs.statSync(out).size : 0;
-      resolve({ id, engine: isDumpcap ? 'dumpcap' : 'tshark', iface, filter, seconds, file: `${id}.pcap`, size, code, log: log.slice(-4000) });
-    });
-    p.on('error', e => reject(e));
-  });
+  return { id, ...(await captureToFile({ out, iface, filter, seconds, onProgress })) };
 }
 
 /** 列出本机网卡（供抓包选择） */
 function listInterfaces() {
-  const exe = findTshark();
-  if (!exe) return [];
+  const eng = captureEngine();
+  const exe = eng.tool === 'tshark' ? eng.bin : null;
+  if (!exe) return Promise.resolve(localInterfaces().filter(i => !i.internal).map((i, n) => ({
+    id: String(n + 1), name: i.name, address: i.address, description: 'PktMon 系统网卡'
+  })));
   return new Promise(resolve => {
     execFile(exe, ['-D'], { windowsHide: true }, (err, stdout) => {
       if (err) return resolve([]);
@@ -401,5 +467,5 @@ module.exports = {
   createThroughputServer, throughputClient, findIperf, runIperf3,
   sshConnect, sshExec,
   detectVendor, parseMacTable, parseArp, parseSessions, TABLE_CMDS,
-  findTshark, localCapture, listInterfaces, localInterfaces
+  findTshark, findNmap, findPktmon, captureEngine, captureToFile, localCapture, listInterfaces, localInterfaces
 };

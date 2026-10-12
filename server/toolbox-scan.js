@@ -30,6 +30,7 @@ const path = require('path');
 
 const IS_WIN = process.platform === 'win32';
 const IS_MAC = process.platform === 'darwin';
+const MAX_TARGETS = 4096;
 const OUI = loadOui();
 
 function loadOui() {
@@ -57,7 +58,10 @@ function execFileP(cmd, args, timeoutMs = 30000) {
   });
 }
 
-function isIPv4(s) { return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(String(s || '').trim()); }
+function isIPv4(s) {
+  const parts = String(s || '').trim().split('.');
+  return parts.length === 4 && parts.every(p => /^\d{1,3}$/.test(p) && Number(p) >= 0 && Number(p) <= 255);
+}
 
 function macNorm(mac) {
   if (!mac) return '';
@@ -167,37 +171,49 @@ async function defaultGateway() {
   return '';
 }
 
-/** 把目标字符串展开为 IP 列表；'auto' 取本机主网卡所在 /24 */
+/** 把目标字符串展开为 IP 列表；'auto' 取本机主网卡 IP 所在 /24。 */
 function expandTargets(target) {
   target = (target || 'auto').trim();
   if (target === 'auto' || target === '') {
     const ifaces = localInterfaces().filter(i => !/docker|vmware|vbox|loopback/i.test(i.name));
     const ifc = ifaces[0] || localInterfaces()[0];
     if (!ifc) throw new Error('无法自动探测本机网段，请手动指定目标');
-    target = ifc.cidr;
+    target = `${ifc.ip.split('.').slice(0, 3).join('.')}.0/24`;
   }
   const ips = [];
+  const ensureCapacity = (count, part) => {
+    if (!Number.isSafeInteger(count) || count < 0 || ips.length + count > MAX_TARGETS) {
+      throw new Error(`目标 ${part} 展开后超过单次上限 ${MAX_TARGETS}，请缩小网段或分批扫描`);
+    }
+  };
   for (let part of target.split(',')) {
     part = part.trim();
     if (!part) continue;
     if (part.includes('/')) {
-      const [base, pref] = part.split('/');
-      const p = clamp(pref, 0, 32, 24) | 0;
-      if (!isIPv4(base)) throw new Error('无法解析目标: ' + part);
+      const segs = part.split('/');
+      const base = segs[0];
+      const pref = segs[1];
+      if (segs.length !== 2 || !isIPv4(base) || !/^\d{1,2}$/.test(pref || '') || Number(pref) > 32) {
+        throw new Error('无法解析目标: ' + part);
+      }
+      const p = Number(pref);
       const mask = p === 0 ? 0 : (0xffffffff << (32 - p)) >>> 0;
       const wildcard = (~mask) >>> 0;
       const netint = (ipToInt(base) & mask) >>> 0;
       const broadcast = (netint | wildcard) >>> 0;
       const start = p <= 30 ? netint + 1 : netint;
       const end = p <= 30 ? broadcast - 1 : broadcast;
+      ensureCapacity(end - start + 1, part);
       for (let x = start; x <= end && x >= start; x++) ips.push(intToIp(x >>> 0));
-    } else if (part.replace(/\./g, '').match(/^\d+$/) && isIPv4(part)) {
+    } else if (isIPv4(part)) {
+      ensureCapacity(1, part);
       ips.push(part);
     } else if (part.includes('-')) {
       const [a, b] = part.split('-').map(s => s.trim());
       if (isIPv4(a) && isIPv4(b)) {
         let s = ipToInt(a), e = ipToInt(b);
         if (s > e) [s, e] = [e, s];
+        ensureCapacity(e - s + 1, part);
         for (let x = s; x <= e; x++) ips.push(intToIp(x >>> 0));
       } else throw new Error('无法解析目标: ' + part);
     } else throw new Error('无法解析目标: ' + part);
@@ -742,14 +758,25 @@ async function netcheck() {
       const r = await new Promise(resolve => {
         const http = require('http');
         let bytes = 0; let done = false;
-        const finish = v => { if (!done) { done = true; resolve(v); } };
-        const req = http.get('http://www.example.com/', resp => {
+        let req;
+        let timer;
+        const cleanup = () => {
+          clearTimeout(timer);
+          if (req && !req.destroyed) req.destroy();
+        };
+        const finish = v => {
+          if (done) return;
+          done = true;
+          cleanup();
+          resolve(v);
+        };
+        req = http.get('http://www.example.com/', resp => {
           resp.on('data', c => { bytes += c.length; });
           resp.on('end', () => finish(bytes));
           resp.resume();
         });
         req.on('error', () => finish(bytes));
-        setTimeout(() => finish(bytes), 3000);
+        timer = setTimeout(() => finish(bytes), 3000);
       });
       const sec = (Date.now() - t0) / 1000;
       if (sec > 0 && r > 0) { const mbps = (r * 8) / sec / 1e6; spDetail = `约 ${mbps.toFixed(1)} Mbps`; spScore = mbps >= 30 ? 5 : mbps >= 5 ? 3 : mbps >= 1 ? 2 : 1; }
@@ -759,8 +786,12 @@ async function netcheck() {
     // 7) 环路检测（IP 冲突）
     let loopScore = 5, loopStatus = 'ok', loopDetail = '未检测到 IP 冲突';
     if (gw) {
-      const ifc = localInterfaces().find(i => i.ip && i.cidr.includes(gw.split('.').slice(0, 3).join('.')));
-      const cidr = ifc ? ifc.cidr : (gw.split('.').slice(0, 3).join('.') + '.0/24');
+      const ifc = localInterfaces().find(i => i.ip &&
+        ((ipToInt(gw) & ipToInt(i.netmask)) >>> 0) === ((ipToInt(i.ip) & ipToInt(i.netmask)) >>> 0));
+      // 体检是快速健康检查，不应在 /16、/8 等大网段上主动 Ping 数万地址。
+      const cidr = ifc && ifc.prefix >= 24
+        ? ifc.cidr
+        : (gw.split('.').slice(0, 3).join('.') + '.0/24');
       try {
         const c = await ipconflict({ target: cidr, timeout: 400 });
         if (c.conflicts && c.conflicts.length) { loopScore = 0; loopStatus = 'fail'; loopDetail = `发现 ${c.conflicts.length} 处 IP 冲突：` + c.conflicts.slice(0, 3).map(x => `${x.ip}↔${x.macs.join(',')}`).join('；'); }

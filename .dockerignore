@@ -1,0 +1,9 @@
+.git
+.github
+data
+dist
+node_modules
+*.log
+*.pcap
+*.pcapng
+npm-debug.log*

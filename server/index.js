@@ -1,6 +1,6 @@
 'use strict';
 /**
- * 网络分析与监控运维控制台 —— 服务入口
+ * 网络运维与故障排除工具平台 —— 服务入口
  * 启动后浏览器访问 http(s)://<本机IP>:8787
  *   - 在 data/ 下放置 cert.pem + key.pem（或设 TLS_CERT/TLS_KEY 环境变量）即自动启用 HTTPS；
  *   - 未提供证书时回退为 HTTP（便于开发/自检）；HTTPS=1 可强制启用（缺证书则启动失败）。
@@ -47,15 +47,32 @@ function fatalExit(err) {
 process.on('uncaughtException', e => console.error('[uncaught]', (e && e.stack) || e));
 process.on('unhandledRejection', e => console.error('[unhandled]', (e && e.stack) || e));
 
-let store, db, auth, netutil, term, router;
+let store, db, auth, netutil, runtimeTools, term, router;
 try {
   store = require('./store');
   db = require('./db');
   auth = require('./auth');
   netutil = require('./netutil');
+  runtimeTools = require('./runtime-tools');
   term = require('./term');
   router = require('./api').router;
 } catch (e) { fatalExit(e); }
+
+/*
+ * 打包版首次启动自动申请管理员令牌：PktMon 本机抓包与 Nmap 的 Windows
+ * 静默安装都受 UAC 保护。用户只需在启动平台时通过一次 Windows 系统提示，
+ * 后续第三方工具全部由后台完成，不再弹各自安装向导。
+ */
+if (process.pkg && process.platform === 'win32' && process.env.NO_ELEVATE !== '1' && !runtimeTools.isElevated()) {
+  try {
+    const ps = require('child_process').spawnSync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      'Start-Process -FilePath $env:NETOPS_EXE -Verb RunAs'
+    ], { windowsHide: true, env: { ...process.env, NETOPS_EXE: process.execPath }, timeout: 30000 });
+    if (ps.status === 0) process.exit(0);
+    console.warn('[runtime] 未获得管理员权限，将保留设备侧抓包与内置扫描回退。');
+  } catch (e) { console.warn('[runtime] 自动提权失败：', e.message); }
+}
 
 const PORT = Number(process.env.PORT || 8787);
 /* 默认双栈监听 '::'：Windows 上 localhost 有可能解析到 ::1，只听 IPv4 会导致
@@ -72,7 +89,7 @@ app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 app.use((req, res, next) => {
   const t0 = Date.now();
   res.on('finish', () => {
-    if (req.path.startsWith('/api') && req.path !== '/api/overview' && !req.path.startsWith('/api/speed/http')) {
+    if (req.path.startsWith('/api') && !req.path.startsWith('/api/speed/http')) {
       const ms = Date.now() - t0;
       if (ms > 800) console.log(`[slow] ${req.method} ${req.path} ${res.statusCode} ${ms}ms`);
     }
@@ -97,9 +114,9 @@ app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now() }));
 /* 抓包文件下载（PCAP 需带正确文件名） */
 app.get('/api/capture/file/:id', (req, res) => {
   const id = String(req.params.id).replace(/[^\w-]/g, '');
-  const p = path.join(store.CAP_DIR, `${id}.pcap`);
-  if (!fs.existsSync(p)) return res.status(404).send('not found');
-  res.download(p, `${id}.pcap`);
+  const p = [path.join(store.CAP_DIR, `${id}.pcap`), path.join(store.CAP_DIR, `${id}.pcapng`)].find(fs.existsSync);
+  if (!p) return res.status(404).send('not found');
+  res.download(p, path.basename(p));
 });
 
 /* SPA 兜底（Express 5 / path-to-regexp v8 需使用命名通配 *splat） */
@@ -186,24 +203,9 @@ wssProbe.on('connection', (ws, req) => {
   ws.on('close', () => { stopped = true; });
 });
 
-/* 大屏实时推送：每 10 秒推一次 KPI 变化（前端也可自行轮询） */
-const wssLive = new WebSocketServer({ noServer: true });
-wssLive.on('connection', (ws, req) => {
-  const u = new URL(req.url, 'http://x');
-  const p = auth.verifyToken(u.searchParams.get('token') || '');
-  if (!p) return ws.close();
-  ws.send(JSON.stringify({ t: 'hello', ts: Date.now() }));
-  const timer = setInterval(() => {
-    if (ws.readyState !== 1) return;
-    ws.send(JSON.stringify({ t: 'tick', ts: Date.now(), cpu: process.memoryUsage().rss / 1048576 | 0 }));
-  }, 10000);
-  ws.on('close', () => clearInterval(timer));
-});
-
 server.on('upgrade', (req, socket, head) => {
   const u = new URL(req.url, 'http://x');
   if (u.pathname === '/ws/probe') return wssProbe.handleUpgrade(req, socket, head, ws => wssProbe.emit('connection', ws, req));
-  if (u.pathname === '/ws/live') return wssLive.handleUpgrade(req, socket, head, ws => wssLive.emit('connection', ws, req));
 });
 
 /* ============================== 启动 ============================== */
@@ -281,7 +283,7 @@ function printReady(port) {
   const scheme = useHttps ? 'https' : 'http';
   const line = '='.repeat(66);
   console.log('\n' + line);
-  console.log('  网络分析与监控运维控制台  netops-console  v1.0.0');
+  console.log('  网络运维与故障排除工具平台  netops-console  v1.1.0');
   console.log(line);
   console.log(`  传输协议        ${useHttps ? 'HTTPS 🔒' : 'HTTP（未启用 TLS）'}`);
   console.log(`  本机访问        ${scheme}://127.0.0.1:${port}`);
@@ -294,7 +296,7 @@ function printReady(port) {
   console.log('');
   console.log(`  数据目录  ${store.DATA_DIR}`);
   console.log(`  数据源    ${db.settingsSync()?.datasource?.mode === 'zabbix' ? 'Zabbix ' + db.settingsSync().datasource.zabbix.url : '演示模式（内置模拟数据）'}`);
-  console.log(`  抓包引擎  ${netutil.findTshark() || '未检测到 Wireshark/Npcap（可用设备侧抓包）'}`);
+  console.log(`  抓包引擎  ${runtimeTools.status().captureEngine}`);
   console.log(`  iperf3    ${netutil.findIperf() || '未检测到（已内置 TCP 吞吐引擎）'}`);
   console.log(`  启动日志  ${START_LOG}`);
   console.log(line + '\n');
@@ -302,6 +304,8 @@ function printReady(port) {
   try { require('./api'); } catch { }
   // 服务确已就绪，此刻再打开浏览器，避免「浏览器先开、服务没起」的假故障
   if (shouldOpenBrowser()) openBrowser(`${scheme}://127.0.0.1:${port}`);
+  /* 外部工具不阻塞平台启动；首次运行在后台静默检测/部署。 */
+  setTimeout(() => runtimeTools.bootstrap().catch(e => console.error('[runtime] 自动部署失败：', e.message)), 1200);
 }
 
 /* 监听启动：IPv6 不可用自动退回 IPv4；端口被占用自动顺延，

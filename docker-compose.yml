@@ -1,0 +1,19 @@
+services:
+  netops-console:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: netops-console:1.1.0
+    container_name: netops-console
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      AUTO_INSTALL_TOOLS: "0"
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data:/app/data

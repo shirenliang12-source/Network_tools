@@ -299,7 +299,7 @@
         </div>
       </div>
     </div>`,
-    setup() {
+    setup(props) {
       const tab = ref('locate');
       const devices = ref([]);
       /* 定位 */
@@ -369,7 +369,9 @@
         try {
           const d = await api.get('/devices');
           devices.value = d.rows || [];
-          if (!tblHost.value && devices.value.length) { tblHost.value = devices.value[0].host; flowHost.value = devices.value[0].host; }
+          const requestedHost = String((props.query && props.query.host) || '');
+          const initialHost = devices.value.some(x => x.host === requestedHost) ? requestedHost : (devices.value[0] && devices.value[0].host);
+          if (!tblHost.value && initialHost) { tblHost.value = initialHost; flowHost.value = initialHost; capHost.value = initialHost; }
         } catch (e) { }
       }
 

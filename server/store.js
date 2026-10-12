@@ -79,11 +79,11 @@ const DEFAULT_DB = () => ({
   version: 1,
   createdAt: new Date().toISOString(),
   settings: {
-    site: { name: '网络运维控制台', subtitle: 'Network Operations Console', logoText: 'NETOPS' },
+    site: { name: '网络运维工具平台', subtitle: 'Network Operations Toolkit', logoText: 'NETOPS' },
     datasource: {
       mode: 'demo',                       // demo | zabbix
-      zabbix: { url: 'http://10.252.28.99', username: 'Admin', password: '', pollSec: 60, tlsVerify: false, timeoutMs: 15000 },
-      lastOkAt: null, lastError: ''
+      zabbix: { url: 'http://10.252.28.99', username: 'Admin', password: '', pollSec: 60, tlsVerify: false, timeoutMs: 15000, groupIds: [] },
+      lastOkAt: null, lastError: '', lastSyncAt: null, lastSyncCount: 0, lastSyncGroups: []
     },
     notify: {
       webhook: { enabled: false, url: '', secret: '' },
@@ -176,6 +176,11 @@ function load() {
   // 结构补齐（版本升级不丢数据）
   const d = DEFAULT_DB();
   DB.settings = deepMerge(d.settings, DB.settings || {});
+  // 将旧版默认品牌文案迁移为工具平台；用户自定义站点名保持不变。
+  if (DB.settings.site && DB.settings.site.name === '网络运维控制台') {
+    DB.settings.site.name = '网络运维工具平台';
+    if (DB.settings.site.subtitle === 'Network Operations Console') DB.settings.site.subtitle = 'Network Operations Toolkit';
+  }
   for (const k of ['users', 'credentials', 'templates', 'alarms', 'aiHistory',
     'scanRuns', 'scanHosts', 'scanPorts', 'scanTasks',
     'netdiagRuns', 'netdiagHosts', 'netdiagFindings', 'netdiagLogs', 'netdiagTasks']) {
